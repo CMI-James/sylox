@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { nativeToScVal, scValToNative } from "@stellar/stellar-sdk";
 
 /**
  * A fake RPC whose retention floor moves forward a few ledgers on
@@ -58,11 +59,17 @@ function makeFakeServer(opts: {
       }
 
       const matching = opts.eventLedgers.filter((l) => l >= startLedger && l < endLedger);
+      // Real xdr.ScVal objects, never plain {}/[] - a live getEvents
+      // response always carries real ScVals (see api.d.ts's own
+      // `topic: xdr.ScVal[]`), and using plain objects here would let
+      // a sessionStorage round-trip bug (JSON.stringify silently
+      // dropping ScVal's own methods) slip past every test in this
+      // file undetected, exactly as happened before this fix.
       const events = matching.map((ledger) => ({
         ledger,
         ledgerClosedAt: new Date(ledger * 1000).toISOString(),
-        topic: [],
-        value: {},
+        topic: [nativeToScVal("sylox", { type: "symbol" }), nativeToScVal("event_proposed", { type: "symbol" })],
+        value: nativeToScVal(ledger, { type: "u64" }),
         id: `event-${ledger}`,
       }));
 
@@ -313,6 +320,55 @@ describe("fetchEventsPaginated (backward-chunked scan, incrementally cached)", (
 
     expect(afterReload.events.map((e) => e.ledger)).toEqual([99_990]);
     expect(fake.callCounts.getEventsCallCount).toBe(eventsCallsBeforeReload); // No new getEvents call needed - sessionStorage already had it.
+  });
+
+  it("rebuilds real, usable ScVals after a sessionStorage round-trip, not plain objects scValToNative can't call .switch() on", async () => {
+    // Reproduces the exact crash: "Could not load events: e.switch is
+    // not a function" on /events after a reload in the same tab.
+    // sessionStorage only ever stores strings - JSON.stringify'ing a
+    // real xdr.ScVal (a class with methods, not plain data) and then
+    // JSON.parse'ing it back loses those methods entirely, so
+    // scValToNative's own internal e.switch() call throws on whatever
+    // comes back out. This asserts the ACTUAL JSON.stringify/JSON.parse
+    // round-trip sessionStorage performs, not just that the module
+    // reports success.
+    const fake = makeFakeServer({
+      latestLedger: 100_000,
+      initialOldestLedger: 100_000 - 120_960,
+      driftPerHealthCall: 0,
+      eventLedgers: [99_990],
+    });
+    fakeServerInstance.instance = fake as never;
+
+    const mod1 = await import("./stellar-rpc-events");
+    await mod1.fetchEventsPaginated({ ...TEST_QUERY, limit: 50 });
+
+    // The literal round-trip sessionStorage performs: a JSON string in,
+    // JSON.parse out. No shortcuts through the module's own in-memory
+    // Map (vi.resetModules clears it, exactly like a real page reload).
+    const key = Object.keys(sessionStorage).find((k) => k.startsWith("sylox-events:"));
+    expect(key).toBeDefined();
+    const persisted = sessionStorage.getItem(key!);
+    expect(persisted).toBeTruthy();
+    JSON.parse(persisted!); // Must not throw - the cached value is plain JSON, not live objects.
+
+    vi.resetModules();
+    const mod2 = await import("./stellar-rpc-events");
+    const afterReload = await mod2.fetchEventsPaginated({ ...TEST_QUERY, limit: 50 });
+
+    expect(afterReload.events).toHaveLength(1);
+    const rebuiltValue = afterReload.events[0].value;
+    // The real crash site: scValToNative calls e.switch() internally.
+    // A plain object survived by JSON.parse (no prototype, no methods)
+    // throws here; a correctly-rebuilt xdr.ScVal does not.
+    expect(() => scValToNative(rebuiltValue as never)).not.toThrow();
+    expect(scValToNative(rebuiltValue as never)).toBe(BigInt(99_990)); // The fake server's value is nativeToScVal(ledger, { type: "u64" }), which decodes back to a bigint.
+
+    const rebuiltTopic = afterReload.events[0].topic as unknown[];
+    expect(rebuiltTopic).toHaveLength(2);
+    for (const t of rebuiltTopic) {
+      expect(() => scValToNative(t as never)).not.toThrow();
+    }
   });
 
   it("replaces (never merges onto) the cache when an incremental refresh itself stops at the request cap before reaching the old cache's floor", async () => {

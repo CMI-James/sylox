@@ -1,4 +1,4 @@
-import { rpc } from "@stellar/stellar-sdk";
+import { rpc, xdr } from "@stellar/stellar-sdk";
 import { RPC_URL, testnetDeployment } from "./contracts/deployment";
 import { planChunks } from "./chunk-plan";
 
@@ -256,13 +256,79 @@ interface CachedState {
   stoppedAtRequestCap: boolean;
 }
 
+// `EventRecordRaw.topic`/`.value` are live `xdr.ScVal` objects - classes
+// with methods (like `.switch()`) that `scValToNative` calls directly.
+// `JSON.stringify` silently drops those methods (it only serializes
+// plain data), so a round trip through sessionStorage must convert them
+// to something JSON actually preserves - base64 XDR strings - and
+// rebuild real ScVals with `xdr.ScVal.fromXDR` on the way back in. The
+// in-memory cache (`memoryCache` below) never goes through this: within
+// the same page load, the original ScVal objects are reused as-is.
+interface SerializedEventRecord {
+  ledger: number;
+  ledgerClosedAt: string;
+  topic: string[]; // base64 XDR, one per topic segment.
+  value: string; // base64 XDR.
+  id: string;
+}
+
+interface SerializedCachedState {
+  events: SerializedEventRecord[];
+  oldestLedgerScanned: number;
+  latestLedgerCovered: number;
+  latestLedgerCloseTime: number;
+  stoppedAtRequestCap: boolean;
+}
+
+function toScVal(value: unknown): xdr.ScVal {
+  // Already a real ScVal (the in-memory cache's own shape, or a value
+  // that never left this module) - nothing to convert.
+  if (value instanceof xdr.ScVal) return value;
+  throw new Error("expected an xdr.ScVal");
+}
+
+function serializeEvent(raw: EventRecordRaw): SerializedEventRecord {
+  return {
+    ledger: raw.ledger,
+    ledgerClosedAt: raw.ledgerClosedAt,
+    topic: (raw.topic as unknown[]).map((t) => toScVal(t).toXDR("base64")),
+    value: toScVal(raw.value).toXDR("base64"),
+    id: raw.id,
+  };
+}
+
+function deserializeEvent(serialized: SerializedEventRecord): EventRecordRaw {
+  return {
+    ledger: serialized.ledger,
+    ledgerClosedAt: serialized.ledgerClosedAt,
+    topic: serialized.topic.map((t) => xdr.ScVal.fromXDR(t, "base64")),
+    value: xdr.ScVal.fromXDR(serialized.value, "base64"),
+    id: serialized.id,
+  };
+}
+
+function serializeCachedState(state: CachedState): SerializedCachedState {
+  return { ...state, events: state.events.map(serializeEvent) };
+}
+
+/** Rebuilds every cached event's ScVals from their base64 XDR strings. Throws (never returns a partially-rebuilt state) if any entry won't rebuild - the caller treats that as "no usable cache" and rescans, rather than serving a cache with some events silently broken. */
+function deserializeCachedState(serialized: SerializedCachedState): CachedState {
+  return { ...serialized, events: serialized.events.map(deserializeEvent) };
+}
+
 const memoryCache = new Map<string, CachedState>();
 
+// Bumped to v2 for the base64-XDR encoding fix below (previously raw
+// ScVal objects were JSON.stringify'd directly, which silently drops
+// their methods on JSON.parse - see SerializedEventRecord's doc
+// comment). The bump means a v1 entry already sitting in a visitor's
+// sessionStorage is simply never read as a hit, not parsed and failed -
+// it ages out on its own once that tab's session ends.
 function cacheKey(query: EventQuery): string {
   // Network + contract + topics: a testnet redeploy (new contract
   // addresses) can never accidentally serve a stale cache entry for
   // an address that no longer means the same thing.
-  return `sylox-events:${testnetDeployment.network}:${query.contractId}:${query.topics.join(",")}`;
+  return `sylox-events:v2:${testnetDeployment.network}:${query.contractId}:${query.topics.join(",")}`;
 }
 
 function readSessionStorage(key: string): CachedState | null {
@@ -270,16 +336,21 @@ function readSessionStorage(key: string): CachedState | null {
     if (typeof sessionStorage === "undefined") return null;
     const raw = sessionStorage.getItem(key);
     if (!raw) return null;
-    return JSON.parse(raw) as CachedState;
+    const serialized = JSON.parse(raw) as SerializedCachedState;
+    return deserializeCachedState(serialized);
   } catch {
-    return null; // Falls back to memory-only, per this file's "wrap every read/write in try/catch" rule.
+    // Covers a missing/malformed entry AND one that parses as JSON but
+    // whose events won't rebuild into real ScVals (deserializeEvent
+    // throwing) - either way, fail safe: drop the cache and let the
+    // caller rescan, rather than erroring the whole events screen.
+    return null;
   }
 }
 
 function writeSessionStorage(key: string, state: CachedState): void {
   try {
     if (typeof sessionStorage === "undefined") return;
-    sessionStorage.setItem(key, JSON.stringify(state));
+    sessionStorage.setItem(key, JSON.stringify(serializeCachedState(state)));
   } catch {
     // Falls back to memory-only - a full/unavailable sessionStorage is never a reason to fail the actual fetch.
   }

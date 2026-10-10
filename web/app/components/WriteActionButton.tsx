@@ -22,6 +22,8 @@ export interface WriteActionButtonProps<T> {
   /** True while this action doesn't apply right now (e.g. Finalize before the challenge window closes) - disables the button with no network call at all. */
   disabled?: boolean;
   disabledReason?: string;
+  /** Called once, right after `confirm` resolves - the caller's hook to refetch whatever this write just changed (the page never reloads itself otherwise). */
+  onSuccess?: () => void;
 }
 
 /**
@@ -45,6 +47,7 @@ export function WriteActionButton<T>({
   confirm,
   disabled = false,
   disabledReason,
+  onSuccess,
 }: WriteActionButtonProps<T>) {
   const { address, openPicker, signTransaction } = useWallet();
   const [step, setStep] = useState<Step>({ kind: "idle" });
@@ -77,6 +80,7 @@ export function WriteActionButton<T>({
       }
       const { txHash } = await confirm(toConfirm, { publicKey: address, signTransaction });
       setStep({ kind: "done", txHash });
+      onSuccess?.();
     } catch (e) {
       setStep({ kind: "error", message: e instanceof Error ? e.message : String(e) });
     }
