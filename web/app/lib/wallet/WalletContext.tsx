@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import { WalletPickerModal, type WalletOption } from "@sylox/ui/components";
-import { getKit } from "./kit";
+import { getKit, ensureFreighterAccess } from "./kit";
 
 export interface SignResult {
   signedTxXdr: string;
@@ -103,6 +103,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (!address) {
         throw new Error("No wallet connected. Connect a wallet, then try again.");
       }
+      // Freighter's own site permission can lag behind this app's
+      // `address` state (see kit.ts's ensureFreighterAccess doc
+      // comment) - checked fresh right before every sign, not just
+      // once back when the wallet was first connected, which is
+      // exactly the gap that let signing fail with Freighter's raw
+      // "not currently connected" error while the app still showed a
+      // connected wallet. A no-op for any other wallet.
+      await ensureFreighterAccess();
       const kit = await getKit();
       // Only the XDR string and the returned XDR string cross this
       // boundary - the kit's own SDK (17.x) never hands this app a

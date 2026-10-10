@@ -42,6 +42,12 @@ export async function loadData(eventId: string): Promise<EventPageData> {
 
 export function EventPageClient({ eventId }: { eventId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  // Bumped after every successful write (Checkpoint/Finalize) to
+  // re-run the effect below and refetch this event's own data - a
+  // write changes the contract's state (the whole point of signing
+  // it), so the page must reflect that on its own rather than leaving
+  // the PROPOSED badge sitting there until a manual reload.
+  const [refetchToken, setRefetchToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,10 +66,15 @@ export function EventPageClient({ eventId }: { eventId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [eventId]);
+  }, [eventId, refetchToken]);
+
+  const handleActionSuccess = () => setRefetchToken((t) => t + 1);
 
   const assetAddress = state.status === "ready" && state.data.proposal.status === "ok"
     ? state.data.proposal.value.record.asset
+    : null;
+  const assetCode = state.status === "ready" && state.data.proposal.status === "ok"
+    ? state.data.proposal.value.assetCode
     : null;
 
   return (
@@ -76,7 +87,7 @@ export function EventPageClient({ eventId }: { eventId: string }) {
             items={[
               { label: "Explorer", href: "/" },
               { label: "Events", href: "/events" },
-              ...(assetAddress ? [{ label: "Asset", href: `/asset/${assetAddress}` }] : []),
+              ...(assetAddress ? [{ label: assetCode ?? "Asset", href: `/asset/${assetAddress}` }] : []),
               { label: `Event #${eventId}` },
             ]}
           />
@@ -94,7 +105,9 @@ export function EventPageClient({ eventId }: { eventId: string }) {
           </p>
         )}
 
-        {state.status === "ready" && <EventSections eventId={eventId} data={state.data} />}
+        {state.status === "ready" && (
+          <EventSections eventId={eventId} data={state.data} onActionSuccess={handleActionSuccess} />
+        )}
       </main>
     </DashboardShell>
   );
@@ -108,13 +121,21 @@ function SectionError({ message }: { message: string }) {
   );
 }
 
-function EventSections({ eventId, data }: { eventId: string; data: EventPageData }) {
+function EventSections({
+  eventId,
+  data,
+  onActionSuccess,
+}: {
+  eventId: string;
+  data: EventPageData;
+  onActionSuccess: () => void;
+}) {
   return (
     <div className="mt-8 flex flex-col gap-10">
       <ProposalSection data={data} />
       <CountdownSection data={data} />
       <CureProgressSection data={data} />
-      <ActionsSection eventId={eventId} data={data} />
+      <ActionsSection eventId={eventId} data={data} onActionSuccess={onActionSuccess} />
     </div>
   );
 }
@@ -150,13 +171,31 @@ function ProposalSection({ data }: { data: EventPageData }) {
 
       <p className="mt-4 max-w-xl text-sm leading-relaxed text-cyber-tin">{definitionSentence}</p>
 
-      {record.declared_at !== undefined && (
+      {isSet(record.declared_at) ? (
         <p className="mt-2 font-mono text-xs text-cyber-tin">
-          Declared at {new Date(Number(record.declared_at) * 1000).toISOString()}.
+          Declared at {formatUtc(record.declared_at)}.
         </p>
+      ) : (
+        record.state.tag === "Proposed" && (
+          <p className="mt-2 font-mono text-xs text-cyber-tin">Proposed at {formatUtc(record.proposed_at)}.</p>
+        )
       )}
     </div>
   );
+}
+
+// `EventRecord.declared_at` is `Option<u64>` on the contract (unset
+// while Proposed), but a 0 has been observed coming through from a
+// live read as well - whichever layer produces it, 0 is never a real
+// Unix timestamp this contract could emit, so both are treated as
+// "not actually set yet" rather than letting either render as an
+// epoch date.
+function isSet(value: bigint | undefined): value is bigint {
+  return value !== undefined && value !== BigInt(0);
+}
+
+function formatUtc(unixSecs: bigint): string {
+  return new Date(Number(unixSecs) * 1000).toISOString();
 }
 
 function CountdownSection({ data }: { data: EventPageData }) {
@@ -218,15 +257,29 @@ function CureProgressSection({ data }: { data: EventPageData }) {
   );
 }
 
-function ActionsSection({ eventId, data }: { eventId: string; data: EventPageData }) {
+function ActionsSection({
+  eventId,
+  data,
+  onActionSuccess,
+}: {
+  eventId: string;
+  data: EventPageData;
+  onActionSuccess: () => void;
+}) {
   if (data.proposal.status === "error") return null;
   const { record } = data.proposal.value;
 
-  // Checkpoint only ever applies while a Depeg event is still Proposed
-  // (checkpoint_cure's own WrongState check) - every other state would
-  // simulate straight to an error, so the button is disabled outright
-  // rather than letting a visitor click into a guaranteed failure.
-  const checkpointDisabled = !(record.kind.tag === "Depeg" && record.state.tag === "Proposed");
+  // checkpoint_cure only ever exists for a Depeg event (every other
+  // kind has no such thing to check) - never a button to show
+  // disabled-with-an-explanation, just not shown at all for those
+  // kinds.
+  const isDepeg = record.kind.tag === "Depeg";
+  // Within a Depeg event, Checkpoint only applies while it's still
+  // Proposed (checkpoint_cure's own WrongState check) - every other
+  // state would simulate straight to an error, so THIS condition
+  // (unlike kind above) is still shown disabled with an explanation,
+  // since it's a real state the event legitimately passes through.
+  const checkpointDisabled = record.state.tag !== "Proposed";
   const finalizeDisabled = record.state.tag !== "Proposed";
 
   const eventIdBigInt = () => {
@@ -241,24 +294,27 @@ function ActionsSection({ eventId, data }: { eventId: string; data: EventPageDat
     <div>
       <Eyebrow>+ ACTIONS</Eyebrow>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <WriteActionButton
-          label="Checkpoint"
-          disabled={checkpointDisabled}
-          disabledReason={checkpointDisabled ? "Only applies to a Depeg event that's still Proposed." : undefined}
-          prepare={(address) => prepareCheckpointCure(eventIdBigInt(), address)}
-          confirm={(prepared, signer) => confirmCheckpointCure(prepared, signer)}
-        />
+        {isDepeg && (
+          <WriteActionButton
+            label="Checkpoint"
+            disabled={checkpointDisabled}
+            disabledReason={checkpointDisabled ? "Only applies while the event's still Proposed." : undefined}
+            prepare={(address) => prepareCheckpointCure(eventIdBigInt(), address)}
+            confirm={(prepared, signer) => confirmCheckpointCure(prepared, signer)}
+            onSuccess={onActionSuccess}
+          />
+        )}
         <WriteActionButton
           label="Finalize"
           disabled={finalizeDisabled}
           disabledReason={finalizeDisabled ? "Only applies to an event that's still Proposed." : undefined}
           prepare={(address) => prepareFinalize(eventIdBigInt(), address)}
           confirm={(prepared, signer) => confirmFinalize(prepared, signer)}
+          onSuccess={onActionSuccess}
         />
       </div>
       <p className="mt-4 font-mono text-xs text-cyber-tin">
-        Trigger (paying out an affected market) belongs here per series, once feat/markets lands - not as
-        one global button.
+        Payouts for affected markets will appear here once protection markets launch.
       </p>
     </div>
   );

@@ -6,10 +6,11 @@ import {
   fetchCoverGate,
   fetchLive,
   fetchScoringStart,
+  sentenceFor,
   PEG_RATIO_SCALE,
 } from "./asset-data";
 import type { RingSlot, SlotState, SignalSet } from "./contracts/risk-oracle";
-import type { CoverGate } from "./contracts/event-registry";
+import type { CoverGate, EventDefinition } from "./contracts/event-registry";
 
 const RING_SLOTS = 240;
 const EPOCH_SECS = 3600;
@@ -587,5 +588,41 @@ describe("fetchPegHistory provisionalSubCoverage", () => {
 
     expect(newestPoint.state).toBe("Final");
     expect(newestPoint.provisionalSubCoverage).toBeNull();
+  });
+});
+
+function fakeIssuerFreezeDef(overrides: Partial<EventDefinition> = {}): EventDefinition {
+  return {
+    asset: "ASSET",
+    auth_revocation_threshold: 2,
+    challenge_secs: BigInt(86_400),
+    cure_threshold: BigInt(0),
+    depeg_threshold: BigInt(0),
+    depeg_window_secs: BigInt(0),
+    freeze_pct_bps: 500,
+    halt_window_secs: BigInt(0),
+    kind: { tag: "IssuerFreeze", values: undefined },
+    max_missing_epochs: 0,
+    mint_spike_bps: 0,
+    version: 1,
+    ...overrides,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test fixture, not a real generated-client value.
+  } as any;
+}
+
+describe("sentenceFor - IssuerFreeze", () => {
+  it("says 'more than N revocations' when the threshold is above 0", () => {
+    const sentence = sentenceFor("IssuerFreeze", fakeIssuerFreezeDef({ auth_revocation_threshold: 2 }));
+    expect(sentence).toBe(
+      "Issuer freeze: clawbacks or authorization revocations above 5% of supply within 7 days, or more than 2 revocations in that window.",
+    );
+  });
+
+  it("says 'any authorization revocation' instead of 'more than 0 revocations' when the threshold is 0", () => {
+    const sentence = sentenceFor("IssuerFreeze", fakeIssuerFreezeDef({ auth_revocation_threshold: 0 }));
+    expect(sentence).toBe(
+      "Issuer freeze: clawbacks or authorization revocations above 5% of supply within 7 days, or any authorization revocation in that window.",
+    );
+    expect(sentence).not.toMatch(/more than 0/i);
   });
 });

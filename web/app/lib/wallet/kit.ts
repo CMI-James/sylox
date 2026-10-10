@@ -63,10 +63,45 @@ async function loadKit() {
   return StellarWalletsKit;
 }
 
+// Matches FreighterModule.productId (@creit.tech/stellar-wallets-kit's
+// own modules/freighter.js) - kept as a plain literal rather than an
+// import, so checking "is Freighter the active wallet" never needs to
+// load that module on its own; getKit() already loaded it once if
+// Freighter was actually picked.
+const FREIGHTER_ID = "freighter";
+
 let kitPromise: ReturnType<typeof loadKit> | null = null;
 
 /** Lazily loads and initializes the kit exactly once; every caller after the first gets the same in-flight/resolved promise. */
 export function getKit() {
   if (!kitPromise) kitPromise = loadKit();
   return kitPromise;
+}
+
+/**
+ * Freighter's own site permission is separate from (and can outlive or
+ * fall behind) this app's in-memory `address` - the kit's
+ * `fetchAddress()` requests access once, on first connect, but nothing
+ * calls it again later. If that permission is revoked, or never
+ * actually survived (e.g. the extension restarted, or the address was
+ * restored into React state - say, via a fast refresh - without the
+ * connect flow running again), signTransaction() fails with Freighter's
+ * own raw error ("... is not currently connected to Freighter") even
+ * though the app still shows a connected wallet. Freighter's
+ * `isAllowed()` checks the real current permission with no prompt;
+ * `requestAccess()` prompts only if actually needed. Call this right
+ * before signing, not just once at connect time.
+ */
+export async function ensureFreighterAccess(): Promise<void> {
+  const kit = await getKit();
+  if (kit.selectedModule.productId !== FREIGHTER_ID) return; // Only Freighter's permission model works this way.
+
+  const { isAllowed, requestAccess } = await import("@stellar/freighter-api");
+  const allowed = await isAllowed();
+  if (allowed.error || !allowed.isAllowed) {
+    const access = await requestAccess();
+    if (access.error) {
+      throw new Error("Freighter needs permission for this site. Connect Freighter, then try again.");
+    }
+  }
 }

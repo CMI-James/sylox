@@ -453,7 +453,11 @@ export function sentenceFor(
     }
     case "IssuerFreeze": {
       const pct = def.freeze_pct_bps / 100;
-      return `Issuer freeze: clawbacks or authorization revocations above ${pct}% of supply within 7 days, or more than ${def.auth_revocation_threshold} revocations in that window.`;
+      const revocationClause =
+        def.auth_revocation_threshold > 0
+          ? `more than ${def.auth_revocation_threshold} revocations in that window`
+          : "any authorization revocation in that window"; // "more than 0 revocations" reads oddly; a threshold of 0 means every revocation counts.
+      return `Issuer freeze: clawbacks or authorization revocations above ${pct}% of supply within 7 days, or ${revocationClause}.`;
     }
     case "MintWithoutBacking": {
       const pct = def.mint_spike_bps / 100;
