@@ -94,7 +94,20 @@ export function getKit() {
  */
 export async function ensureFreighterAccess(): Promise<void> {
   const kit = await getKit();
-  if (kit.selectedModule.productId !== FREIGHTER_ID) return; // Only Freighter's permission model works this way.
+
+  let selectedProductId: string;
+  try {
+    // `selectedModule` is a getter that THROWS a plain object
+    // ({code: -3, message: "Please set the wallet first"}, never an
+    // Error) when no wallet has been picked yet - caught here and
+    // turned into the same plain-language message the rest of this
+    // function already uses, so a caller never has to guard against
+    // this rendering as "[object Object]".
+    selectedProductId = kit.selectedModule.productId;
+  } catch {
+    throw new Error("No wallet connected. Connect a wallet, then try again.");
+  }
+  if (selectedProductId !== FREIGHTER_ID) return; // Only Freighter's permission model works this way.
 
   const { isAllowed, requestAccess } = await import("@stellar/freighter-api");
   const allowed = await isAllowed();

@@ -68,6 +68,25 @@ describe("ensureFreighterAccess", () => {
     vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess }));
   }
 
+  /** The real kit's own `selectedModule` getter when no wallet has ever been set (see kit.js: `throw { code: -3, message: "Please set the wallet first" }`) - a plain object, never an Error. */
+  function mockKitModulesNoWalletSelected() {
+    vi.doMock("@creit.tech/stellar-wallets-kit", () => ({
+      StellarWalletsKit: {
+        init: vi.fn(),
+        get selectedModule(): never {
+          throw { code: -3, message: "Please set the wallet first" };
+        },
+      },
+      Networks: FAKE_NETWORKS,
+    }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/freighter", () => ({
+      FreighterModule: class {},
+    }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/xbull", () => ({ xBullModule: class {} }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/albedo", () => ({ AlbedoModule: class {} }));
+    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess }));
+  }
+
   it("does nothing for a non-Freighter wallet - isAllowed/requestAccess are never called", async () => {
     mockKitModules("xbull");
     const { ensureFreighterAccess } = await import("./kit");
@@ -119,5 +138,17 @@ describe("ensureFreighterAccess", () => {
 
     await expect(ensureFreighterAccess()).resolves.toBeUndefined();
     expect(requestAccess).toHaveBeenCalled();
+  });
+
+  it("shows a plain message, not '[object Object]', when no wallet has been selected yet", async () => {
+    mockKitModulesNoWalletSelected();
+    const { ensureFreighterAccess } = await import("./kit");
+
+    await expect(ensureFreighterAccess()).rejects.toThrow(
+      /connect a wallet, then try again\./i,
+    );
+    // Never calls into Freighter at all - there's no wallet to check permission for yet.
+    expect(isAllowed).not.toHaveBeenCalled();
+    expect(requestAccess).not.toHaveBeenCalled();
   });
 });
