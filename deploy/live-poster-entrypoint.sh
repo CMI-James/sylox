@@ -42,9 +42,18 @@ log "Importing the keeper identity from SYLOX_KEEPER_SECRET"
 # Piped over stdin, never passed as an argument: `stellar keys add`
 # reads the secret from stdin when it is not an interactive terminal,
 # the same mechanism verified by hand against this exact CLI version
-# before writing this script. Every container start is a fresh
-# filesystem (no prior ~/.config/stellar state), so there is nothing
-# to overwrite and no --overwrite flag is needed.
+# before writing this script.
+#
+# --overwrite is REQUIRED here, not optional: confirmed in production
+# (the second of two consecutive scheduled Railway cron runs failed
+# with "An identity with the name 'sylox-testnet-keeper' already
+# exists") that Railway's cron service does NOT guarantee a fresh
+# filesystem on every scheduled invocation - this image's own
+# `~/.config/stellar` state from a prior run can persist into the
+# next one. The original assumption here (every run starts from a
+# clean filesystem) held for a one-off local `docker run` test but
+# not for Railway's own real execution model. --overwrite makes this
+# idempotent regardless of which case applies.
 #
 # Review finding: on FAILURE, the CLI's own output is withheld, never
 # logged - a rejected input could be the secret itself (e.g. SYLOX_
@@ -54,7 +63,7 @@ log "Importing the keeper identity from SYLOX_KEEPER_SECRET"
 # is unaffected: confirmed by hand that a SUCCESSFUL `stellar keys
 # add` only ever names the identity file it wrote, never the secret,
 # so logging that output on success is still safe.
-if ! import_out="$(printf '%s' "$SYLOX_KEEPER_SECRET" | stellar keys add "$KEEPER_IDENTITY" --secret-key 2>&1)"; then
+if ! import_out="$(printf '%s' "$SYLOX_KEEPER_SECRET" | stellar keys add "$KEEPER_IDENTITY" --secret-key --overwrite 2>&1)"; then
   die "importing the keeper identity failed (output withheld; check SYLOX_KEEPER_SECRET is a valid S... secret)"
 fi
 log "$import_out"
