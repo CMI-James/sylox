@@ -217,6 +217,14 @@ anything):
    testnet.json` - a wrong secret fails loudly before it can post as
    the wrong identity, never silently.
 
+   **Never run a command that prints variable VALUES on this service**
+   (plain `railway variables --service sylox-live-poster`, or `--kv`
+   on its own, both print `SYLOX_KEEPER_SECRET`'s real value). This
+   happened once, by accident, while checking something unrelated.
+   To see which variables are set, without their values: `railway
+   variables --service sylox-live-poster --kv | cut -d= -f1`, or use
+   the Railway dashboard's own variable list instead of the CLI.
+
 **Root `railway.json` risk:** that file configures the `web/landing`
 service's own build/start commands. `sylox-live-poster`, like
 `sylox-app`, is built from its own Dockerfile and deployed by
