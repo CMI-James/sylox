@@ -9,7 +9,28 @@
 # the same convention web/app/Dockerfile uses, so deploy/'s own helper
 # scripts (shared between the two) resolve the same relative paths
 # whether run locally or in this container.
-FROM debian:13-slim
+#
+# --platform=linux/amd64 is PINNED here, in the Dockerfile itself, not
+# left to a --platform flag on whatever build command happens to be
+# run. Railway's own infrastructure is x86_64; pinning it here means
+# every build - local or CI - targets the same real architecture the
+# stellar-cli binary below actually is, rather than silently building
+# for the host's own native arch (reproduced directly while writing
+# this file: an unpinned build on an arm64 Mac downloaded and
+# extracted the binary fine, then failed to run it in the same build
+# step). This also means local builds run under QEMU emulation on
+# Apple Silicon, which is slower than a native build - expected, not
+# a problem with this file.
+#
+# BuildKit's own linter flags a literal --platform value here
+# ("FromPlatformFlagConstDisallowed") because it's usually meant to be
+# a build ARG for cross-compiling multiple targets from one
+# Dockerfile. That flexibility is deliberately NOT wanted here: this
+# image has exactly one real target (Railway's x86_64), so the
+# constant is the point, not an oversight - a stray --platform flag on
+# some future build invocation should never be able to silently
+# change what this image actually targets.
+FROM --platform=linux/amd64 debian:bookworm-slim
 
 # jq: used throughout deploy/post-demo-signals.sh to build/parse
 #   signal JSON.
@@ -18,10 +39,18 @@ FROM debian:13-slim
 #   itself makes).
 # ca-certificates: both curl (the release download) and the stellar
 #   CLI's own RPC/Horizon calls need real TLS verification.
+# libdbus-1-3: the stellar binary itself needs libdbus-1.so.3 at
+#   runtime (its own OS-native secure-store key support links against
+#   it even when that feature is never used here) - found by the
+#   `stellar --version` check below failing with "error while loading
+#   shared libraries: libdbus-1.so.3: cannot open shared object file"
+#   once the build actually ran the real x86_64 binary (platform
+#   pinned above) instead of just extracting it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       jq \
       curl \
       ca-certificates \
+      libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # stellar-cli 28.1.0 from the official release binary, checksum
@@ -32,27 +61,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # build (slow, and pulls in the full Rust toolchain this image has no
 # other use for), when the project's own CI already downloads and
 # verifies this exact prebuilt binary.
-# No `&& stellar --version` self-check at the end of this RUN line,
-# unlike CI's own install step: this image's target platform is
-# linux/amd64 (Railway's real infrastructure), and a build run under
-# QEMU emulation (e.g. testing this Dockerfile locally on an arm64
-# Mac without matching the build's own target arch to the host) can
-# download and extract the correct x86_64 binary perfectly well but
-# then fail to EXECUTE it in that same emulated step - reproduced
-# directly while writing this file ("rosetta error: failed to open
-# elf at /lib64/ld-linux-x86-64.so.2"), purely a side effect of local
-# cross-arch testing, not a real problem with the binary or this
-# image. CI's own "stellar contract build" job already proves this
-# exact curl+checksum+tar sequence produces a working binary, on a
-# real x86_64 host (ubuntu-latest), which is what this image actually
-# targets.
+#
+# The final `stellar --version` actually EXECUTES the extracted
+# binary and greps its output for the exact pinned version string -
+# this is deliberate, not just a sanity echo: with --platform=linux/
+# amd64 pinned on the FROM line above, this step runs the binary for
+# real (under QEMU emulation on an arm64 build host, natively on a
+# real x86_64 one), so it catches a wrong binary, a wrong
+# architecture, or a checksum that verified but still didn't produce
+# a working executable - on this machine AND on Railway's own build,
+# not just locally. This exact check is what caught the original bug
+# in this file (an earlier version omitted --platform, built for the
+# host's own native arch by default, and failed here) - keep it.
 ARG STELLAR_CLI_VERSION=28.1.0
 ARG STELLAR_CLI_SHA256=c1680deee94301d33ada7a17f98411e642a4248c727afbd2e43050d345746462
 RUN curl -sSfL "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
       -o /tmp/stellar-cli.tar.gz \
     && echo "${STELLAR_CLI_SHA256}  /tmp/stellar-cli.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/stellar-cli.tar.gz -C /usr/local/bin stellar \
-    && rm /tmp/stellar-cli.tar.gz
+    && rm /tmp/stellar-cli.tar.gz \
+    && stellar --version | grep -qF "${STELLAR_CLI_VERSION}"
 
 WORKDIR /app
 
