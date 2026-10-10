@@ -45,8 +45,17 @@ log "Importing the keeper identity from SYLOX_KEEPER_SECRET"
 # before writing this script. Every container start is a fresh
 # filesystem (no prior ~/.config/stellar state), so there is nothing
 # to overwrite and no --overwrite flag is needed.
+#
+# Review finding: on FAILURE, the CLI's own output is withheld, never
+# logged - a rejected input could be the secret itself (e.g. SYLOX_
+# KEEPER_SECRET set to something malformed, or to stray extra text
+# around the real secret), and an error message that echoes back what
+# it could not parse is a real way to leak it. The success path below
+# is unaffected: confirmed by hand that a SUCCESSFUL `stellar keys
+# add` only ever names the identity file it wrote, never the secret,
+# so logging that output on success is still safe.
 if ! import_out="$(printf '%s' "$SYLOX_KEEPER_SECRET" | stellar keys add "$KEEPER_IDENTITY" --secret-key 2>&1)"; then
-  die "importing the keeper identity failed: $import_out"
+  die "importing the keeper identity failed (output withheld; check SYLOX_KEEPER_SECRET is a valid S... secret)"
 fi
 log "$import_out"
 

@@ -177,24 +177,36 @@ confirmed bug on this account).
 which project/environment the CLI is linked to before creating
 anything):
 
-1. `railway add --service sylox-live-poster --image debian:13-slim` (or
-   create it from the dashboard) in the same project as `sylox-app`.
-   The image set here is a placeholder; the real one is built and
-   pushed by the `deploy-live-poster` CI job below, the same pattern
-   `sylox-app` already uses.
-2. **Cron Schedule** (Settings → the service's own cron field):
+1. `railway add --service sylox-live-poster --image debian:bookworm-slim`
+   (or create it from the dashboard) in the same project as
+   `sylox-app`. The image set here is a placeholder; the real one is
+   built and pushed by the `deploy-live-poster` CI job below, the
+   same pattern `sylox-app` already uses.
+2. **`RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile.live-poster`**, as a
+   service variable. Railway only looks for a file literally named
+   `Dockerfile` at the repo root unless a service sets this variable
+   (https://docs.railway.com/builds/dockerfiles); without it,
+   `railway up` from the repo root falls back to auto-detection and
+   the root `railway.json`, which builds `web/landing`, not this
+   service. (`sylox-app` reaches its own, differently-named-and-
+   located Dockerfile through a dashboard-level Build setting instead
+   of this variable - see `web/app/README.md`'s own "Deployment"
+   section for exactly what is and isn't set there. Either mechanism
+   works; this service uses the variable because it's the one
+   documented directly in Railway's own Dockerfile build docs.)
+3. **Cron Schedule** (Settings → the service's own cron field):
    `1-56/5 * * * *`, UTC. One minute after each 5-minute boundary, so
    whichever sub-epoch just closed has actually closed by the time
    the run starts, not racing its own close.
-3. **Restart Policy:** `Never`. Each invocation is one `--live` pass
+4. **Restart Policy:** `Never`. Each invocation is one `--live` pass
    that runs to completion and exits 0 (or a real, non-#103/#115
    error); this is a cron job, not a daemon that should be restarted
    if it exits.
-4. **Watch paths:** leave empty, same fix as `sylox-app`, for the
+5. **Watch paths:** leave empty, same fix as `sylox-app`, for the
    same reason (see `web/app/README.md`). Turn this service's own
    Railway auto-deploy OFF once `deploy-live-poster` has deployed it
    successfully at least once, same as `sylox-app`.
-5. **Variable:** `SYLOX_KEEPER_SECRET`, the `sylox-testnet-keeper`
+6. **Variable:** `SYLOX_KEEPER_SECRET`, the `sylox-testnet-keeper`
    identity's own secret key. Set directly on the service in the
    Railway dashboard by whoever holds that key - never pasted into a
    PR, an issue, a commit, or asked for in chat. The entrypoint
