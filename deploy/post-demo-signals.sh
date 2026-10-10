@@ -155,7 +155,7 @@ post_hourly() {
     --arg supply "$SUPPLY" \
     '{epoch: ($epoch|tonumber), peg_ratio: ($peg_ratio|tonumber), peg_ratio_p10: ($peg_ratio_p10|tonumber), liquidity_2pct: ($liquidity|tonumber), supply: ($supply|tonumber), redemption_net: 0, supply_change_bps: 0, endpoint: "Unknown"}')
   local inputs_hash
-  inputs_hash="$(printf '%s' "$inputs_json" | shasum -a 256 | cut -d' ' -f1)"
+  inputs_hash="$(printf '%s' "$inputs_json" | sha256sum | cut -d' ' -f1)"
 
   jq --argjson entry "$(jq -nc --argjson inputs "$inputs_json" --arg hash "$inputs_hash" '{inputs: $inputs, inputs_hash: $hash, path: "hourly"}')" \
      '. += [$entry]' "$INPUTS_FILE" > "$INPUTS_FILE.tmp" && mv "$INPUTS_FILE.tmp" "$INPUTS_FILE"
@@ -211,7 +211,7 @@ post_sub_epochs() {
       --arg liquidity "$LIQUIDITY" --arg supply "$SUPPLY" \
       '{hour: ($epoch|tonumber), sub: ($sub|tonumber), peg_ratio: ($peg_ratio|tonumber), peg_ratio_p10: ($peg_ratio_p10|tonumber), liquidity_2pct: ($liquidity|tonumber), supply: ($supply|tonumber), redemption_net: 0, supply_change_bps: 0, endpoint: "Unknown"}')
     local inputs_hash
-    inputs_hash="$(printf '%s' "$inputs_json" | shasum -a 256 | cut -d' ' -f1)"
+    inputs_hash="$(printf '%s' "$inputs_json" | sha256sum | cut -d' ' -f1)"
 
     jq --argjson entry "$(jq -nc --argjson inputs "$inputs_json" --arg hash "$inputs_hash" '{inputs: $inputs, inputs_hash: $hash, path: "sub_epoch"}')" \
        '. += [$entry]' "$INPUTS_FILE" > "$INPUTS_FILE.tmp" && mv "$INPUTS_FILE.tmp" "$INPUTS_FILE"
@@ -245,7 +245,7 @@ post_one_sub_epoch() {
   local peg_ratio=$(( 10000000 + noise * 1000 ))
   local peg_ratio_p10=$(( peg_ratio - 2000 ))
   local inputs_hash
-  inputs_hash="$(printf '%s' "live:$hour:$sub:$peg_ratio" | shasum -a 256 | cut -d' ' -f1)"
+  inputs_hash="$(printf '%s' "live:$hour:$sub:$peg_ratio" | sha256sum | cut -d' ' -f1)"
   local signal_set="{\"epoch\":$hour,\"posted_at\":0,\"peg_ratio\":\"$peg_ratio\",\"peg_ratio_p10\":\"$peg_ratio_p10\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$SUPPLY\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
 
   local out

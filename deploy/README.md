@@ -162,3 +162,71 @@ the triggering signal at all if the real numbers, checked against the
 registered definition's own `freeze_pct_bps` with the same integer
 arithmetic `check_issuer_freeze` uses, would not actually clear the
 threshold — so this specific mistake cannot happen silently again.
+
+## `sylox-live-poster`: the Railway cron service
+
+`--live` posting (Section above) moves off whichever machine runs it
+manually and onto its own Railway cron service once this is reviewed
+and deployed. This section is what someone sets up by hand in the
+Railway dashboard; none of it is config-as-code, matching
+`sylox-app`'s own reasoning in `web/app/README.md`'s "Deployment"
+section (Railway's config-as-code / watch-path evaluation has a
+confirmed bug on this account).
+
+**Creating the service** (run `railway status` first, to confirm
+which project/environment the CLI is linked to before creating
+anything):
+
+1. `railway add --service sylox-live-poster --image debian:13-slim` (or
+   create it from the dashboard) in the same project as `sylox-app`.
+   The image set here is a placeholder; the real one is built and
+   pushed by the `deploy-live-poster` CI job below, the same pattern
+   `sylox-app` already uses.
+2. **Cron Schedule** (Settings → the service's own cron field):
+   `1-56/5 * * * *`, UTC. One minute after each 5-minute boundary, so
+   whichever sub-epoch just closed has actually closed by the time
+   the run starts, not racing its own close.
+3. **Restart Policy:** `Never`. Each invocation is one `--live` pass
+   that runs to completion and exits 0 (or a real, non-#103/#115
+   error); this is a cron job, not a daemon that should be restarted
+   if it exits.
+4. **Watch paths:** leave empty, same fix as `sylox-app`, for the
+   same reason (see `web/app/README.md`). Turn this service's own
+   Railway auto-deploy OFF once `deploy-live-poster` has deployed it
+   successfully at least once, same as `sylox-app`.
+5. **Variable:** `SYLOX_KEEPER_SECRET`, the `sylox-testnet-keeper`
+   identity's own secret key. Set directly on the service in the
+   Railway dashboard by whoever holds that key - never pasted into a
+   PR, an issue, a commit, or asked for in chat. The entrypoint
+   (`deploy/live-poster-entrypoint.sh`) reads it, imports it as the
+   `sylox-testnet-keeper` identity, and refuses to run at all (exits
+   non-zero with a clear message) if the imported identity's own
+   address does not match `.identities.keeper` in `deployments/
+   testnet.json` - a wrong secret fails loudly before it can post as
+   the wrong identity, never silently.
+
+**Root `railway.json` risk:** that file configures the `web/landing`
+service's own build/start commands. `sylox-live-poster`, like
+`sylox-app`, is built from its own Dockerfile and deployed by
+`railway up` from CI, which does not go through Railpack/Nixpacks
+auto-detection at all - but confirm this directly after the first real
+deploy anyway (`railway logs --service sylox-live-poster`): the logs
+should show this entrypoint's own `==>` lines running, never
+`web/landing`'s start command. If the landing service's own command
+shows up instead, that is the same class of bug `sylox-app` already
+hit once; stop and report it rather than working around it.
+
+**Shared keeper account:** both the Railway cron service and any
+local stopgap loop post as the same `sylox-testnet-keeper` identity.
+Running both at once is expected to occasionally produce a sequence-
+number clash on whichever one loses a race for the same sub-epoch -
+harmless (the loser's own post just fails and that sub-epoch gets
+caught up on its next tick), but keep any overlap short: confirm the
+Railway cron service is actually posting successfully before stopping
+a local stopgap loop, not the other way around.
+
+**"Done" for the initial rollout:** two consecutive scheduled runs
+each logging their own `live: posted N ... skipped M` summary line
+with no errors other than the expected `Error #103`/`#115` (already-
+posted) skips, followed by one `live(asset)` read showing a sub-epoch
+from within the last 10 minutes.

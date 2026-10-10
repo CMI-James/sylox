@@ -1,0 +1,65 @@
+# Image for the sylox-live-poster Railway cron service: runs ONE
+# deploy/post-demo-signals.sh testnet --live pass per invocation, then
+# exits (restart policy: Never - each run is one pass, not a daemon).
+#
+# Debian slim, not node:*-slim (unlike web/app/Dockerfile): this image
+# runs a bash script, not a Node build; Node is not needed at all.
+#
+# Builds from the repo root (`docker build -f deploy/Dockerfile.live-poster .`),
+# the same convention web/app/Dockerfile uses, so deploy/'s own helper
+# scripts (shared between the two) resolve the same relative paths
+# whether run locally or in this container.
+FROM debian:13-slim
+
+# jq: used throughout deploy/post-demo-signals.sh to build/parse
+#   signal JSON.
+# curl: fetches the stellar-cli release tarball below, nothing else
+#   at runtime (no network calls at runtime beyond what `stellar`
+#   itself makes).
+# ca-certificates: both curl (the release download) and the stellar
+#   CLI's own RPC/Horizon calls need real TLS verification.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      jq \
+      curl \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# stellar-cli 28.1.0 from the official release binary, checksum
+# verified against the SAME value .github/workflows/ci.yml pins
+# (STELLAR_CLI_SHA256) - one source of truth for this number, not a
+# second copy that could drift from CI's own. cargo install is
+# deliberately NOT used: it would compile from source inside the
+# build (slow, and pulls in the full Rust toolchain this image has no
+# other use for), when the project's own CI already downloads and
+# verifies this exact prebuilt binary.
+# No `&& stellar --version` self-check at the end of this RUN line,
+# unlike CI's own install step: this image's target platform is
+# linux/amd64 (Railway's real infrastructure), and a build run under
+# QEMU emulation (e.g. testing this Dockerfile locally on an arm64
+# Mac without matching the build's own target arch to the host) can
+# download and extract the correct x86_64 binary perfectly well but
+# then fail to EXECUTE it in that same emulated step - reproduced
+# directly while writing this file ("rosetta error: failed to open
+# elf at /lib64/ld-linux-x86-64.so.2"), purely a side effect of local
+# cross-arch testing, not a real problem with the binary or this
+# image. CI's own "stellar contract build" job already proves this
+# exact curl+checksum+tar sequence produces a working binary, on a
+# real x86_64 host (ubuntu-latest), which is what this image actually
+# targets.
+ARG STELLAR_CLI_VERSION=28.1.0
+ARG STELLAR_CLI_SHA256=c1680deee94301d33ada7a17f98411e642a4248c727afbd2e43050d345746462
+RUN curl -sSfL "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+      -o /tmp/stellar-cli.tar.gz \
+    && echo "${STELLAR_CLI_SHA256}  /tmp/stellar-cli.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/stellar-cli.tar.gz -C /usr/local/bin stellar \
+    && rm /tmp/stellar-cli.tar.gz
+
+WORKDIR /app
+
+# Only deploy/ and the current deployment record, not the whole repo
+# (unlike web/app/Dockerfile, which needs the full monorepo for npm
+# workspace resolution): this image has no other dependency.
+COPY deploy/ deploy/
+COPY deployments/testnet.json deployments/testnet.json
+
+ENTRYPOINT ["deploy/live-poster-entrypoint.sh"]
