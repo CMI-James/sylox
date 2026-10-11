@@ -79,6 +79,70 @@ export function getKit() {
 }
 
 /**
+ * Restores a previously-connected wallet on page load, with no popup
+ * and no network call that could prompt one - the kit itself already
+ * persists `selectedModuleId`/`activeAddress` to localStorage
+ * (`@StellarWalletsKit/selectedModuleId`, `@StellarWalletsKit/
+ * activeAddress`) and seeds its own signals from them the moment it's
+ * initialized (see `loadKit` above calling `StellarWalletsKit.init`),
+ * so there is no separate key of this app's own to read - this
+ * function's only job is deciding whether that already-restored state
+ * is still trustworthy enough to show as connected.
+ *
+ * - No wallet was ever selected (or the persisted id matches none of
+ *   this app's own modules): resolves `null`, nothing to restore.
+ * - Freighter: the one wallet this kit version exposes a real
+ *   permission check for. `isAllowed()` (no prompt) confirms the site
+ *   still has access; only then does `kit.getAddress()` - reading the
+ *   kit's own already-restored memory, not a fresh wallet round-trip -
+ *   return the address. Not allowed (or no longer installed/unlocked,
+ *   which `isAllowed` surfaces as `error` the same way): the kit's own
+ *   saved state is cleared via `disconnect()` so a stale selection
+ *   doesn't keep resurfacing on every future load, and this resolves
+ *   `null`.
+ * - xBull/Albedo: this kit version exposes no silent "is this still
+ *   allowed" check for either (unlike Freighter's `isAllowed`), so the
+ *   kit's own already-restored `activeAddress` is trusted as-is - the
+ *   same thing every OTHER read in this app already does once
+ *   connected, and exactly the restore behavior this kit ships by
+ *   default. A truly stale xBull/Albedo permission surfaces at the
+ *   next sign attempt instead, same as before this function existed.
+ */
+export async function restoreWalletSilently(): Promise<string | null> {
+  const kit = await getKit();
+
+  let selectedProductId: string;
+  try {
+    selectedProductId = kit.selectedModule.productId;
+  } catch {
+    return null; // Nothing was ever selected.
+  }
+
+  if (selectedProductId !== FREIGHTER_ID) {
+    try {
+      const { address } = await kit.getAddress();
+      return address;
+    } catch {
+      return null;
+    }
+  }
+
+  const { isAllowed } = await import("@stellar/freighter-api");
+  const allowed = await isAllowed();
+  if (allowed.error || !allowed.isAllowed) {
+    await kit.disconnect(); // Clears the kit's own saved selection/address so this stale state doesn't keep resurfacing.
+    return null;
+  }
+
+  try {
+    const { address } = await kit.getAddress();
+    return address;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Freighter's own site permission is separate from (and can outlive or
  * fall behind) this app's in-memory `address` - the kit's
  * `fetchAddress()` requests access once, on first connect, but nothing

@@ -5,6 +5,20 @@ import { WriteActionButton } from "./WriteActionButton";
 import { WalletProvider } from "@/lib/wallet/WalletContext";
 import type { Prepared } from "@/lib/event-actions";
 
+// Every test in this file either connects through the real picker
+// flow (and overrides restoreWalletSilently itself via its own
+// vi.doMock, below) or renders WriteActionButton disconnected and
+// never cares about a silent restore at all - this file-level mock
+// (hoisted before WalletContext's own static import above resolves)
+// keeps WalletProvider's mount-time restore from ever reaching the
+// real @stellar/freighter-api import, which this jsdom test
+// environment can't load (a CJS/ESM interop error, unrelated to
+// anything under test here).
+vi.mock("@/lib/wallet/kit", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+  return { ...actual, restoreWalletSilently: vi.fn(async () => null) };
+});
+
 const ADDRESS_A = "GCWWB2WYVRE4SSMASR6EMFQ7D3K6BEOLN5UQAXGS5YWPX2ZJ44JYKER5";
 const ADDRESS_B = "GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP";
 
@@ -28,9 +42,13 @@ function makeFakeKit(getAddress: () => string) {
   };
 }
 
-/** Mocking "@/lib/wallet/kit" wholesale (as these tests already do for getKit) replaces ensureFreighterAccess too, since both live in that module - these tests never call through signTransaction for real, so a no-op stand-in is enough to keep the module shape valid. */
+/** Mocking "@/lib/wallet/kit" wholesale (as these tests already do for getKit) replaces ensureFreighterAccess and restoreWalletSilently too, since all three live in that module. These tests drive connection through the picker for real, never rely on a silent restore, so a no-op stand-in for each is enough to keep the module shape valid. */
 function fakeEnsureFreighterAccess() {
   return vi.fn(async () => {});
+}
+
+function fakeRestoreWalletSilently() {
+  return vi.fn(async () => null);
 }
 
 /** `connectButtonName` picks which exact button opens the picker - a standalone WalletButton reads "Connect wallet"; WriteActionButton's own disconnected state reads "Connect wallet to <label>", and a test with only one of the two must say which it means so a loose /connect wallet/i never matches the wrong one once both are rendered together. */
@@ -44,7 +62,7 @@ async function connectWallet(user: ReturnType<typeof userEvent.setup>, connectBu
 
 describe("WriteActionButton", () => {
   it("shows 'Connect wallet to <label>' when no wallet is connected, and never calls prepare", async () => {
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
     const prepare = vi.fn();
 
     render(
@@ -81,7 +99,7 @@ describe("WriteActionButton", () => {
 describe("WriteActionButton - connected flow", () => {
   it("calls prepare with the connected address once a wallet connects, then confirm with a matching signer", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -117,7 +135,7 @@ describe("WriteActionButton - connected flow", () => {
 
   it("shows the simulated error in plain words and never calls confirm when prepare rejects", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -146,7 +164,7 @@ describe("WriteActionButton - connected flow", () => {
   it("re-prepares against the new address if the connected wallet changes before confirm", async () => {
     vi.resetModules();
     let currentAddress = ADDRESS_A;
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => currentAddress), ensureFreighterAccess: fakeEnsureFreighterAccess() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => currentAddress), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
@@ -207,6 +225,7 @@ describe("WriteActionButton - connected flow", () => {
     vi.doMock("@/lib/wallet/kit", () => ({
       getKit: async () => makeFakeKit(() => ADDRESS_A),
       ensureFreighterAccess: checkAccess,
+      restoreWalletSilently: fakeRestoreWalletSilently(),
     }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
@@ -256,6 +275,7 @@ describe("WriteActionButton - connected flow", () => {
     vi.doMock("@/lib/wallet/kit", () => ({
       getKit: async () => makeFakeKit(() => ADDRESS_A),
       ensureFreighterAccess: fakeEnsureFreighterAccess(),
+      restoreWalletSilently: fakeRestoreWalletSilently(),
     }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
@@ -298,6 +318,7 @@ describe("WriteActionButton - connected flow", () => {
       ensureFreighterAccess: vi.fn(async () => {
         throw new Error("Freighter needs permission for this site. Connect Freighter, then try again.");
       }),
+      restoreWalletSilently: fakeRestoreWalletSilently(),
     }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");

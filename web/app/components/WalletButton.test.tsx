@@ -4,6 +4,17 @@ import userEvent from "@testing-library/user-event";
 import { WalletButton } from "./WalletButton";
 import { WalletProvider } from "@/lib/wallet/WalletContext";
 
+// WalletProvider's mount effect calls restoreWalletSilently
+// unconditionally; the top-level import above resolves (and runs that
+// effect, for tests that never re-import with their own vi.doMock)
+// before any per-test mock could take effect, so this file-level mock
+// keeps it from reaching the real @stellar/freighter-api import,
+// which this jsdom test environment can't load.
+vi.mock("@/lib/wallet/kit", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+  return { ...actual, restoreWalletSilently: vi.fn(async () => null) };
+});
+
 const ADDRESS = "GCWWB2WYVRE4SSMASR6EMFQ7D3K6BEOLN5UQAXGS5YWPX2ZJ44JYKER5";
 
 /**
@@ -54,7 +65,7 @@ describe("WalletButton", () => {
 describe("WalletButton - connected", () => {
   it("shows the shortened address as a button with a visible dropdown affordance, and opens a menu with Copy address and Disconnect on click", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
 
@@ -88,7 +99,7 @@ describe("WalletButton - connected", () => {
 
   it("disconnects the wallet and returns to the 'Connect wallet' state when Disconnect is clicked", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit() }));
+    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null }));
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
 

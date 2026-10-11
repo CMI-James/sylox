@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Eyebrow, Card } from "@sylox/ui/components";
 import {
   fetchExplorerData,
@@ -94,7 +95,7 @@ export default function ExplorerPage() {
 
 function AssetCard({ row }: { row: ExplorerAssetRow }) {
   return (
-    <Card href={`/asset/${row.asset}`} className="flex flex-col gap-4">
+    <Card href={`/asset/${row.asset}`} as={Link} className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-display text-xl text-silo-oatmeal">{row.code}</p>

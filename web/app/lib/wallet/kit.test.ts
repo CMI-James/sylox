@@ -152,3 +152,100 @@ describe("ensureFreighterAccess", () => {
     expect(requestAccess).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * restoreWalletSilently: the kit itself already persists
+ * selectedModuleId/activeAddress to localStorage and seeds its own
+ * signals from them - this function only decides whether that
+ * already-restored state is still trustworthy enough to surface as
+ * connected, with NO popup and NO network call that could prompt one.
+ */
+describe("restoreWalletSilently", () => {
+  const isAllowed = vi.fn();
+  const disconnect = vi.fn(async () => {});
+
+  beforeEach(() => {
+    vi.resetModules();
+    isAllowed.mockReset();
+    disconnect.mockReset().mockResolvedValue(undefined);
+  });
+
+  function mockKitModules(opts: { selectedProductId?: string; getAddressResult?: { address: string } }) {
+    vi.doMock("@creit.tech/stellar-wallets-kit", () => ({
+      StellarWalletsKit: {
+        init: vi.fn(),
+        get selectedModule() {
+          if (!opts.selectedProductId) throw { code: -3, message: "Please set the wallet first" };
+          return { productId: opts.selectedProductId };
+        },
+        // StellarWalletsKit's own static getAddress() - reads its
+        // already-restored in-memory activeAddress, never a wallet
+        // round-trip. Distinct from @stellar/freighter-api's own
+        // getAddress, which restoreWalletSilently never calls.
+        getAddress: vi.fn(async () => {
+          if (opts.getAddressResult) return opts.getAddressResult;
+          throw { code: -1, message: "No wallet has been connected." };
+        }),
+        disconnect,
+      },
+      Networks: FAKE_NETWORKS,
+    }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/freighter", () => ({
+      FreighterModule: class {},
+    }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/xbull", () => ({ xBullModule: class {} }));
+    vi.doMock("@creit.tech/stellar-wallets-kit/modules/albedo", () => ({ AlbedoModule: class {} }));
+    vi.doMock("@stellar/freighter-api", () => ({ isAllowed }));
+  }
+
+  it("resolves null, with no wallet or network calls, when nothing was ever selected", async () => {
+    mockKitModules({});
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBeNull();
+    expect(isAllowed).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it("restores the address for Freighter when isAllowed is true, with no requestAccess call", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: "GFREIGHTER" } });
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBe("GFREIGHTER");
+    expect(isAllowed).toHaveBeenCalled();
+  });
+
+  it("clears the kit's saved state and resolves null when Freighter no longer allows the site", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: "GFREIGHTER" } });
+    isAllowed.mockResolvedValue({ isAllowed: false });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBeNull();
+    expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("clears the kit's saved state and resolves null when isAllowed itself errors (wallet locked or missing)", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: "GFREIGHTER" } });
+    isAllowed.mockResolvedValue({ isAllowed: false, error: { message: "not installed" } });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBeNull();
+    expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("trusts the kit's own already-restored address for a non-Freighter wallet (xBull/Albedo), with no permission check available", async () => {
+    mockKitModules({ selectedProductId: "xbull", getAddressResult: { address: "GXBULL" } });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBe("GXBULL");
+    expect(isAllowed).not.toHaveBeenCalled();
+  });
+
+  it("resolves null for a non-Freighter wallet if the kit itself has nothing restored", async () => {
+    mockKitModules({ selectedProductId: "xbull" }); // No getAddressResult - kit.getAddress() throws.
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBeNull();
+  });
+});
