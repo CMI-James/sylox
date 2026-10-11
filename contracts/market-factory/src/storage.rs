@@ -3,7 +3,13 @@
 //! (`Pins`, `LiveCoverCount`), Section 11.1 (`HardCap`,
 //! `LiquidityCoverRatio` - see `get_hard_cap`/`get_liquidity_cover_ratio`
 //! below for why these two exist at all; the spec names the `cover_cap`
-//! formula but never says where its two inputs live).
+//! formula but never says where its two inputs live), Section 2
+//! (`PriceGuard` - same gap: M2 names the mechanism but never says
+//! where a per-asset guard address is configured. `Series`' own
+//! constructor signature is already fixed by Section 12.5 and does
+//! not carry a governor address, so a guard cannot be set directly on
+//! `Series`; stored here instead, the same governor-settable,
+//! per-asset pattern as `RelatedSellers` and `HardCap`).
 
 use soroban_sdk::{contracttype, Address, BytesN, Env, Map, Vec};
 use sylox_types::EventKind;
@@ -62,6 +68,10 @@ pub enum DataKey {
     /// default, since that default is the spec's own value, not a
     /// placeholder.
     LiquidityCoverRatio,
+    /// Governor-set per-asset `PriceGuard` client address (M2, Section
+    /// 2). Absent means no guard configured - `buy_cover` skips the
+    /// check entirely, exactly as the spec's own stated default.
+    PriceGuard(Address),
 }
 
 pub fn get_config(env: &Env) -> Option<Config> {
@@ -203,4 +213,21 @@ pub fn set_liquidity_cover_ratio(env: &Env, ratio: i128) {
     env.storage()
         .instance()
         .set(&DataKey::LiquidityCoverRatio, &ratio);
+}
+
+pub fn get_price_guard(env: &Env, asset: &Address) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PriceGuard(asset.clone()))
+}
+
+pub fn set_price_guard(env: &Env, asset: &Address, guard: Option<Address>) {
+    let key = DataKey::PriceGuard(asset.clone());
+    match guard {
+        Some(address) => {
+            env.storage().persistent().set(&key, &address);
+            sylox_types::ttl::extend_persistent(env, &key);
+        }
+        None => env.storage().persistent().remove(&key),
+    }
 }

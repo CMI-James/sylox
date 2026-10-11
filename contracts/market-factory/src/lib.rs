@@ -329,6 +329,17 @@ impl MarketFactory {
         Ok(())
     }
 
+    /// M2 (Section 2): the per-asset `PriceGuard` client address
+    /// `Series.buy_cover` checks. `None` clears it - `buy_cover` then
+    /// skips the check entirely, the spec's own stated default.
+    pub fn set_price_guard(env: Env, asset: Address, guard: Option<Address>) -> Result<(), Error> {
+        let config = Self::require_config(&env)?;
+        config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
+        storage::set_price_guard(&env, &asset, guard);
+        Ok(())
+    }
+
     // -- reads --
 
     /// Live series only (Section 12.4).
@@ -364,6 +375,11 @@ impl MarketFactory {
     /// `None` if never set (distinct from an explicitly empty list).
     pub fn related_sellers(env: Env, asset: Address) -> Option<Vec<Address>> {
         storage::get_related_sellers(&env, &asset)
+    }
+
+    /// `None` if no `PriceGuard` is configured for this asset (M2).
+    pub fn price_guard(env: Env, asset: Address) -> Option<Address> {
+        storage::get_price_guard(&env, &asset)
     }
 
     // -- internal --

@@ -618,6 +618,19 @@ fn related_sellers_defaults_to_none_until_set_then_reads_back() {
 }
 
 #[test]
+fn price_guard_defaults_to_none_until_set_then_reads_back_and_can_be_cleared() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let asset = Address::generate(&env);
+    assert_eq!(fx.client.price_guard(&asset), None);
+    let guard = Address::generate(&env);
+    fx.client.set_price_guard(&asset, &Some(guard.clone()));
+    assert_eq!(fx.client.price_guard(&asset), Some(guard));
+    fx.client.set_price_guard(&asset, &None);
+    assert_eq!(fx.client.price_guard(&asset), None);
+}
+
+#[test]
 fn cover_cap_is_the_minimum_of_hard_cap_and_liquidity_ratio_term() {
     let env = Env::default();
     let fx = setup(&env);
