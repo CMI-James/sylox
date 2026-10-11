@@ -225,6 +225,11 @@ impl MarketFactory {
         SeriesOpened {
             asset: terms.asset.clone(),
             series: series.clone(),
+            series_id: id,
+            def_versions: terms.def_versions.clone(),
+            start: terms.start,
+            expiry: terms.expiry,
+            cap: terms.cap,
         }
         .publish(&env);
         Ok(series)
