@@ -246,7 +246,12 @@ export type LiveValue =
 export async function fetchLive(oracle: ReturnType<typeof riskOracleClient>, asset: string): Promise<LiveValue> {
   const tx = await oracle.live({ asset });
   const result = tx.result;
-  if (result === undefined) return { status: "none" };
+  // SDK 17's generated bindings decode a contract's `Option<T>` as
+  // `T | null`, not `T | undefined` - checked for both here (and at
+  // every other Option<T> read in this file) since nothing about the
+  // contract's own semantics changed, only the SDK's own JS
+  // representation of "no value" did.
+  if (result === undefined || result === null) return { status: "none" };
   const [subEpoch, signals, slotState] = result;
   return {
     status: "value",
@@ -380,14 +385,14 @@ export async function fetchEffectiveRing(
   });
 }
 
-/** `first_epoch()`'s result, or undefined on ANY failure (rejection or a synchronous throw) - "treat every hour as tracked" rather than guessing. */
+/** `first_epoch()`'s result, or undefined on ANY failure (rejection or a synchronous throw) - "treat every hour as tracked" rather than guessing. Normalizes the SDK's own `null` ("no value") to this function's `undefined` convention right here, so every caller keeps its existing `=== undefined` check. */
 async function tryFetchFirstEpoch(
   oracle: ReturnType<typeof riskOracleClient>,
   asset: string,
 ): Promise<bigint | undefined> {
   try {
     const tx = await oracle.first_epoch({ asset });
-    return tx.result;
+    return tx.result ?? undefined;
   } catch {
     return undefined;
   }

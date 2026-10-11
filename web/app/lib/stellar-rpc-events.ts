@@ -282,8 +282,13 @@ interface SerializedCachedState {
 
 function toScVal(value: unknown): xdr.ScVal {
   // Already a real ScVal (the in-memory cache's own shape, or a value
-  // that never left this module) - nothing to convert.
-  if (value instanceof xdr.ScVal) return value;
+  // that never left this module) - nothing to convert. `xdr.ScVal` is
+  // a union of concrete variant classes (ScValSymbol, ScValU64, ...)
+  // sharing an abstract base; `instanceof xdr.ScVal` only narrows to
+  // that base (missing each variant's own fields), so `ScVal.is` is
+  // the SDK's own documented replacement - it narrows to the real
+  // union instead.
+  if (xdr.ScVal.is(value)) return value;
   throw new Error("expected an xdr.ScVal");
 }
 
@@ -291,8 +296,8 @@ function serializeEvent(raw: EventRecordRaw): SerializedEventRecord {
   return {
     ledger: raw.ledger,
     ledgerClosedAt: raw.ledgerClosedAt,
-    topic: (raw.topic as unknown[]).map((t) => toScVal(t).toXDR("base64")),
-    value: toScVal(raw.value).toXDR("base64"),
+    topic: (raw.topic as unknown[]).map((t) => toScVal(t).toXdr("base64")),
+    value: toScVal(raw.value).toXdr("base64"),
     id: raw.id,
   };
 }
@@ -301,8 +306,8 @@ function deserializeEvent(serialized: SerializedEventRecord): EventRecordRaw {
   return {
     ledger: serialized.ledger,
     ledgerClosedAt: serialized.ledgerClosedAt,
-    topic: serialized.topic.map((t) => xdr.ScVal.fromXDR(t, "base64")),
-    value: xdr.ScVal.fromXDR(serialized.value, "base64"),
+    topic: serialized.topic.map((t) => xdr.ScVal.fromXdr(t, "base64")),
+    value: xdr.ScVal.fromXdr(serialized.value, "base64"),
     id: serialized.id,
   };
 }

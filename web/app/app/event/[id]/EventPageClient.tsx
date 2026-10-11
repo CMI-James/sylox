@@ -185,13 +185,14 @@ function ProposalSection({ data }: { data: EventPageData }) {
 }
 
 // `EventRecord.declared_at` is `Option<u64>` on the contract (unset
-// while Proposed), but a 0 has been observed coming through from a
-// live read as well - whichever layer produces it, 0 is never a real
-// Unix timestamp this contract could emit, so both are treated as
-// "not actually set yet" rather than letting either render as an
-// epoch date.
-function isSet(value: bigint | undefined): value is bigint {
-  return value !== undefined && value !== BigInt(0);
+// while Proposed) - decoded as `bigint | null` by the generated
+// bindings (SDK 17; previously `bigint | undefined`) - but a 0 has
+// also been observed coming through from a live read. Whichever of
+// null/undefined/0 shows up, 0 is never a real Unix timestamp this
+// contract could emit, so all three are treated as "not actually set
+// yet" rather than letting any of them render as an epoch date.
+function isSet(value: bigint | null | undefined): value is bigint {
+  return value !== undefined && value !== null && value !== BigInt(0);
 }
 
 function formatUtc(unixSecs: bigint): string {

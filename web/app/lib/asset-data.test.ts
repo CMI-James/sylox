@@ -30,7 +30,7 @@ function emptySlot(): RingSlot {
     clawback_amount: BigInt(0),
     auth_revocations: 0,
     endpoint: EMPTY_ENDPOINT,
-    provisional_sub_coverage: undefined,
+    provisional_sub_coverage: null,
   };
 }
 
@@ -488,10 +488,18 @@ function fakeSignalSet(overrides: Partial<SignalSet> = {}): SignalSet {
 }
 
 describe("fetchLive", () => {
-  it("returns 'none' when live() resolves to None", async () => {
+  it("returns 'none' when live() resolves to None (undefined - a fake client's own convention)", async () => {
     const oracle = { live: async () => ({ result: undefined }) } as unknown as Parameters<
       typeof fetchLive
     >[0];
+
+    const value = await fetchLive(oracle, "ASSET");
+
+    expect(value).toEqual({ status: "none" });
+  });
+
+  it("returns 'none' when live() resolves to None (null - the real SDK 17 generated binding's shape for Option<T>)", async () => {
+    const oracle = { live: async () => ({ result: null }) } as unknown as Parameters<typeof fetchLive>[0];
 
     const value = await fetchLive(oracle, "ASSET");
 
@@ -521,8 +529,18 @@ describe("fetchLive", () => {
 });
 
 describe("fetchScoringStart", () => {
-  it("says 'unknown' when first_epoch() resolves to None", async () => {
+  it("says 'unknown' when first_epoch() resolves to None (undefined - a fake client's own convention)", async () => {
     const oracle = { first_epoch: async () => ({ result: undefined }) } as unknown as Parameters<
+      typeof fetchScoringStart
+    >[0];
+
+    const start = await fetchScoringStart(oracle, "ASSET");
+
+    expect(start).toEqual({ status: "unknown" });
+  });
+
+  it("says 'unknown' when first_epoch() resolves to None (null - the real SDK 17 generated binding's shape for Option<T>)", async () => {
+    const oracle = { first_epoch: async () => ({ result: null }) } as unknown as Parameters<
       typeof fetchScoringStart
     >[0];
 

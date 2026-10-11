@@ -1,14 +1,19 @@
 import { NETWORK_PASSPHRASE } from "@/lib/contracts/deployment";
 
 /**
- * The Stellar Wallets Kit bundles its OWN @stellar/stellar-sdk (17.x),
- * separate from this app's (16.x, what the generated contract bindings
- * were built against - see issue #37 for the planned upgrade). Nothing
- * here imports a type or value from that bundled SDK; everything that
- * crosses the kit/app boundary is a plain XDR string, never a
- * Transaction or other SDK object - those can fail type checks across
- * versions even when TypeScript compiles cleanly, since each SDK's
- * classes are distinct at runtime.
+ * The Stellar Wallets Kit bundles its OWN @stellar/stellar-sdk, which
+ * now resolves to the exact same 17.2.1 this app itself pins (issue
+ * #37's upgrade - `npm ls @stellar/stellar-sdk` shows one copy,
+ * deduped). The XDR-strings-only rule below predates that upgrade,
+ * written when the two sides ran different SDK majors and a
+ * Transaction or other SDK object could fail type checks across
+ * versions even when TypeScript compiled cleanly. Left in place for
+ * now even though both sides match - issue #37's own plan is to drop
+ * it in a later PR once the single-SDK-version upgrade has run in
+ * production for a while, not to lift it in the same PR that landed
+ * the upgrade. Nothing here imports a type or value from that bundled
+ * SDK; everything that crosses the kit/app boundary is still a plain
+ * XDR string, never a Transaction or other SDK object.
  *
  * Imported only from inside the wallet picker's open handler (never
  * from a module eagerly loaded on every page), and only the three

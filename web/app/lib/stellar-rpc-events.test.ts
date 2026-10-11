@@ -371,6 +371,40 @@ describe("fetchEventsPaginated (backward-chunked scan, incrementally cached)", (
     }
   });
 
+  it("drops the cache and rescans, rather than throwing, when a sessionStorage entry won't rebuild into real ScVals", async () => {
+    const fake = makeFakeServer({
+      latestLedger: 100_000,
+      initialOldestLedger: 100_000 - 120_960,
+      driftPerHealthCall: 0,
+      eventLedgers: [99_990],
+    });
+    fakeServerInstance.instance = fake as never;
+
+    const mod1 = await import("./stellar-rpc-events");
+    await mod1.fetchEventsPaginated({ ...TEST_QUERY, limit: 50 });
+
+    // Corrupt the persisted cache in place: still valid JSON (so
+    // JSON.parse itself doesn't throw), but its base64 strings are
+    // garbage that xdr.ScVal.fromXdr can't decode as XDR at all -
+    // e.g. a cache entry a future format change, or a browser
+    // extension, wrote in some other shape.
+    const key = Object.keys(sessionStorage).find((k) => k.startsWith("sylox-events:"));
+    expect(key).toBeDefined();
+    const parsed = JSON.parse(sessionStorage.getItem(key!)!);
+    parsed.events[0].value = "not-valid-base64-xdr!!!";
+    sessionStorage.setItem(key!, JSON.stringify(parsed));
+
+    vi.resetModules();
+    const eventsCallsBeforeReload = fake.callCounts.getEventsCallCount;
+    const mod2 = await import("./stellar-rpc-events");
+    const afterReload = await mod2.fetchEventsPaginated({ ...TEST_QUERY, limit: 50 });
+
+    // Never throws, and genuinely rescans (the corrupted cache was
+    // treated as "no usable cache", not silently served broken).
+    expect(afterReload.events.map((e) => e.ledger)).toEqual([99_990]);
+    expect(fake.callCounts.getEventsCallCount).toBeGreaterThan(eventsCallsBeforeReload);
+  });
+
   it("replaces (never merges onto) the cache when an incremental refresh itself stops at the request cap before reaching the old cache's floor", async () => {
     const fake = makeFakeServer({
       latestLedger: 100_000,

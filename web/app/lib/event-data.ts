@@ -111,7 +111,7 @@ async function fetchCountdown(
   if (record.state.tag === "Escalated") {
     const tx = await registry.ruling_deadline({ event_id: eventId });
     const deadline = tx.result;
-    if (deadline === undefined) {
+    if (deadline === undefined || deadline === null) {
       throw new Error("Event is Escalated but the contract has no ruling deadline for it.");
     }
     return { phase: "ruling", deadline };
