@@ -140,14 +140,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # Installs web/app, web/landing and web/shared/ui (npm workspaces
-      # declared in the repo-root package.json) in one pass. web/app's
-      # lib/contracts/*/src bindings are generated locally via
-      # `stellar contract bindings typescript` against live testnet and
-      # committed (see web/app/scripts/generate-bindings.mjs) - CI has
-      # no network path to regenerate them, so it builds against the
-      # committed copy like any other source file.
+      # Installs web/app, web/landing, web/shared/ui and packages/sdk
+      # (npm workspaces declared in the repo-root package.json) in one
+      # pass.
       - run: npm ci
+      # web/app depends on @sylox/sdk's own compiled dist/ output (its
+      # package.json points "types"/"main" there, not at raw src/ - see
+      # packages/sdk/package.json's own comment on why, unlike
+      # web/shared/ui, this package needs a real build step). This job
+      # runs on its own fresh runner, with no filesystem overlap with
+      # the separate `sdk` job below (and no `needs:` between them
+      # either) - so without this step, web/app's own typecheck/build
+      # below fails with "Cannot find module '@sylox/sdk'" against a
+      # clean checkout, even though it can look fine locally if a
+      # developer's own packages/sdk/dist/ happens to already exist
+      # from an unrelated earlier build.
+      - name: Build packages/sdk
+        run: npm run build -w packages/sdk
       - name: Typecheck web/shared/ui
         run: npx tsc --noEmit
         working-directory: web/shared/ui
