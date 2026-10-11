@@ -123,6 +123,42 @@ enum StakingKey {
     Aggregate(Address, u64),
 }
 
+/// markets design note Section 10: `version_has_live_cover` now calls
+/// the real `MarketFactory.has_live_cover`, so `setup`'s own
+/// `factory` address has to be a real contract, not a bare generated
+/// address - every unit test here defaults to "no live series pins
+/// anything" (matching this stand-in's own pre-markets behavior)
+/// unless a test explicitly says otherwise via `set_has_live_cover`.
+#[contract]
+struct MockMarketFactory;
+
+#[contractimpl]
+impl MockMarketFactory {
+    pub fn set_has_live_cover(
+        env: Env,
+        asset: Address,
+        kind: EventKind,
+        version: u32,
+        value: bool,
+    ) {
+        env.storage()
+            .temporary()
+            .set(&FactoryKey::LiveCover(asset, kind, version), &value);
+    }
+    pub fn has_live_cover(env: Env, asset: Address, kind: EventKind, version: u32) -> bool {
+        env.storage()
+            .temporary()
+            .get(&FactoryKey::LiveCover(asset, kind, version))
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+enum FactoryKey {
+    LiveCover(Address, EventKind, u32),
+}
+
 #[contract]
 struct MockGovernor;
 
@@ -154,6 +190,8 @@ struct Fixture<'a> {
     staking: Address,
     staking_client: MockStakingClient<'a>,
     factory: Address,
+    #[allow(dead_code)]
+    factory_client: MockMarketFactoryClient<'a>,
     usdc: Address,
     keeper: Address,
 }
@@ -169,7 +207,8 @@ fn setup(env: &Env) -> Fixture<'_> {
     let staking = env.register(MockStaking, ());
     let staking_client = MockStakingClient::new(env, &staking);
 
-    let factory = Address::generate(env);
+    let factory = env.register(MockMarketFactory, ());
+    let factory_client = MockMarketFactoryClient::new(env, &factory);
     let usdc = Address::generate(env);
 
     // `EventRegistry`'s constructor needs `oracle_id` and
@@ -218,6 +257,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         staking,
         staking_client,
         factory,
+        factory_client,
         usdc,
         keeper,
     }
@@ -614,6 +654,37 @@ fn register_definition_rejects_a_second_version_while_an_event_is_in_progress() 
         .client
         .try_register_definition(&depeg_definition(&env, &asset));
     assert_eq!(result, Err(Ok(Error::EventInProgress)));
+}
+
+/// markets design note Section 10: `version_has_live_cover` now
+/// really calls `MarketFactory.has_live_cover` - this proves the
+/// wiring itself works, not just that it was replaced without
+/// breaking anything else.
+#[test]
+fn register_definition_rejects_definition_in_use_when_a_live_series_pins_it() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let asset = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    fx.oracle
+        .add_asset(&asset_config(&env, &asset, &issuer, IssuerFlags::default()));
+    fx.client
+        .register_definition(&depeg_definition(&env, &asset));
+
+    fx.factory_client
+        .set_has_live_cover(&asset, &EventKind::Depeg, &1, &true);
+
+    let result = fx
+        .client
+        .try_register_definition(&depeg_definition(&env, &asset));
+    assert_eq!(result, Err(Ok(Error::DefinitionInUse)));
+
+    // Once the factory reports no live series pinning it, superseding works again.
+    fx.factory_client
+        .set_has_live_cover(&asset, &EventKind::Depeg, &1, &false);
+    fx.client
+        .register_definition(&depeg_definition(&env, &asset));
+    assert_eq!(fx.client.current_version(&asset, &EventKind::Depeg), 2);
 }
 
 // -- propose_tier1: Depeg --
@@ -2895,6 +2966,48 @@ fn migrate_without_governor_auth_traps() {
 
     // No mock_all_auths(): the governor never actually signs this call.
     client.migrate();
+}
+
+/// markets design note Section 10, deviation 14: the real
+/// `MarketFactory` address lands once, then is permanently locked.
+/// (The end-to-end proof that a reachable factory address actually
+/// gets queried is `register_definition_rejects_definition_in_use_
+/// when_a_live_series_pins_it`, against `setup()`'s own factory; this
+/// test is specifically about the one-time lock.)
+#[test]
+fn set_factory_succeeds_once_then_locks() {
+    let env = Env::default();
+    let fx = setup(&env);
+
+    fx.client.set_factory(&Address::generate(&env));
+
+    let result = fx.client.try_set_factory(&Address::generate(&env));
+    assert_eq!(result, Err(Ok(Error::FactoryAlreadySet)));
+}
+
+#[test]
+#[should_panic]
+fn set_factory_without_governor_auth_traps() {
+    let env = Env::default();
+    let governor = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let factory = Address::generate(&env);
+    let usdc = Address::generate(&env);
+    let contract_id = env.register(
+        EventRegistry,
+        (
+            governor.clone(),
+            oracle.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
+    let client = EventRegistryClient::new(&env, &contract_id);
+
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.set_factory(&Address::generate(&env));
 }
 
 /// There is no longer a separate `initialize` call to invoke twice

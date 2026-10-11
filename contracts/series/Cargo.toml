@@ -14,7 +14,14 @@ soroban-sdk = { workspace = true }
 sylox-types = { workspace = true }
 
 [dev-dependencies]
+proptest = "1.11.0"
 soroban-sdk = { workspace = true, features = ["testutils"] }
+price-guard-mock = { path = "../price-guard-mock" }
+risk-oracle = { path = "../risk-oracle", features = ["testutils"] }
+event-registry = { path = "../event-registry", features = ["testutils"] }
+staking = { path = "../staking", features = ["testutils"] }
+treasury = { path = "../treasury", features = ["testutils"] }
+market-factory = { path = "../market-factory", features = ["testutils"] }
 
 [features]
 testutils = ["soroban-sdk/testutils"]

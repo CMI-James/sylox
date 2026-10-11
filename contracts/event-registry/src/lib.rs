@@ -73,7 +73,7 @@ use sylox_types::{
 pub use error::Error;
 use storage::Config;
 
-use clients::{GovernorClient, RiskOracleClient, StakingClient};
+use clients::{GovernorClient, MarketFactoryClient, RiskOracleClient, StakingClient};
 
 /// Epoch length. Frozen for v1 (technical-doc.md Section 23); mirrors
 /// `RiskOracle`'s own private `EPOCH_SECS`, which `EventRegistry`
@@ -124,11 +124,20 @@ use sylox_types::time::MAX_CURE_EPOCHS;
 pub struct EventRegistry;
 
 /// Issue #12. Bump by hand on every `upgrade()` this contract ships.
-const CONTRACT_VERSION: u32 = 1;
+/// Bumped to 2 for this upgrade: `version_has_live_cover` goes from a
+/// stand-in to a real `MarketFactory` call, and `set_factory` is new
+/// (markets design note Section 10, deviation 14).
+const CONTRACT_VERSION: u32 = 2;
 /// Issue #12. Instance key for `sylox_types::upgrade::do_migrate`'s own
 /// "which version has this contract's storage already been migrated to"
 /// marker.
 const MIGRATED_TO_KEY: Symbol = symbol_short!("MIGRATE");
+/// markets design note Section 10, deviation 14: instance key for the
+/// one-time lock on `set_factory` - present (always `true`) once set,
+/// absent beforehand. A dedicated flag, never a comparison against
+/// the placeholder address's own value, so this works identically on
+/// every network regardless of what that redeploy's placeholder was.
+const FACTORY_SET_KEY: Symbol = symbol_short!("FACT_SET");
 
 #[contractimpl]
 impl EventRegistry {
@@ -197,6 +206,27 @@ impl EventRegistry {
         ) {
             return Err(Error::AlreadyMigrated);
         }
+        Ok(())
+    }
+
+    /// markets design note Section 10, deviation 14: the real
+    /// `MarketFactory` address, governor-only, exactly once. `factory`
+    /// (set at construction) is a placeholder until `MarketFactory`
+    /// is deployed; this call gives it the real address and then
+    /// permanently locks - a second call, naming any address
+    /// including the same one, is rejected. Taking the address as a
+    /// call argument (never a hardcoded constant) means this same
+    /// upgrade works on every network regardless of what address each
+    /// one's own placeholder happened to be.
+    pub fn set_factory(env: Env, factory: Address) -> Result<(), Error> {
+        let mut config = Self::require_config(&env)?;
+        config.governor.require_auth();
+        if env.storage().instance().has(&FACTORY_SET_KEY) {
+            return Err(Error::FactoryAlreadySet);
+        }
+        config.factory = factory;
+        storage::set_config(&env, &config);
+        env.storage().instance().set(&FACTORY_SET_KEY, &true);
         Ok(())
     }
 
@@ -690,16 +720,19 @@ impl EventRegistry {
     }
 
     /// Design note Section 2: the single function routing "does a live
-    /// series still pin this version" through one place. `MarketFactory`
-    /// is out of scope for this build; always `false`.
+    /// series still pin this version" through one place. markets
+    /// design note Section 10 closes this: `MarketFactory` owns the
+    /// pinned-version bookkeeping itself (`Pins`/`LiveCoverCount`), so
+    /// this is one cross-contract call, not an iteration over
+    /// `Series` instances.
     fn version_has_live_cover(
-        _env: &Env,
-        _config: &Config,
-        _asset: &Address,
-        _kind: EventKind,
-        _version: u32,
+        env: &Env,
+        config: &Config,
+        asset: &Address,
+        kind: EventKind,
+        version: u32,
     ) -> bool {
-        false
+        MarketFactoryClient::new(env, &config.factory).has_live_cover(asset, &kind, &version)
     }
 
     fn enter_active(env: &Env, oracle: &RiskOracleClient, asset: &Address) {

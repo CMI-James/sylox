@@ -1,12 +1,13 @@
 //! Minimal client interfaces for the contracts `EventRegistry` calls
 //! into, but does not implement. technical-doc.md Section 5.8, 12.1
-//! (RiskOracle), 12.3 (Staking), 12.6 (Governor). Each trait lists only
-//! the functions `EventRegistry` actually calls, not that contract's
-//! full API; mock contracts implementing these traits live in `test.rs`
-//! and `budget_test.rs`, never the production build.
+//! (RiskOracle), 12.3 (Staking), 12.4 (MarketFactory), 12.6
+//! (Governor). Each trait lists only the functions `EventRegistry`
+//! actually calls, not that contract's full API; mock contracts
+//! implementing these traits live in `test.rs` and `budget_test.rs`,
+//! never the production build.
 
 use soroban_sdk::{contractclient, Address, Env, Vec};
-use sylox_types::{AssetConfig, BondKey, RingSlot, SlotState};
+use sylox_types::{AssetConfig, BondKey, EventKind, RingSlot, SlotState};
 
 #[contractclient(name = "RiskOracleClient")]
 #[allow(dead_code)]
@@ -71,4 +72,14 @@ pub trait Staking {
 #[allow(dead_code)]
 pub trait Governor {
     fn committee(env: Env) -> Address;
+}
+
+/// markets design note, Section 10: closes `version_has_live_cover`'s
+/// stand-in. `MarketFactory` owns the "does a live series still pin
+/// this version" bookkeeping itself (`Pins`/`LiveCoverCount`); this is
+/// the one call that asks it.
+#[contractclient(name = "MarketFactoryClient")]
+#[allow(dead_code)]
+pub trait MarketFactory {
+    fn has_live_cover(env: Env, asset: Address, kind: EventKind, version: u32) -> bool;
 }

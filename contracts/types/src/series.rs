@@ -48,6 +48,13 @@ pub struct Quote {
     pub rate_bps: u32,
     /// Cover this seller still offers.
     pub available: i128,
+    /// markets design note, Section 8: FIFO tie-break key alongside
+    /// `rate_bps`, assigned from a per-series monotonic counter the
+    /// moment a quote is created. Changing an existing quote's rate or
+    /// size is not an update in place; it is a new quote with a fresh
+    /// `sequence`, sent to the back of its new rate tier. A partial
+    /// fill keeps its own quote's original `sequence`.
+    pub sequence: u64,
 }
 
 /// A seller's position in one series. technical-doc.md Section 9.1.
