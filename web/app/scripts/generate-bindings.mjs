@@ -1,12 +1,31 @@
 #!/usr/bin/env node
 // Regenerates lib/contracts/<name>/ for every contract in
-// deployments/testnet.json via `stellar contract bindings typescript`.
-// Contract IDs are never hardcoded in app code; this script (and the
-// generated clients it produces) is the one place that reads them,
-// straight from the deployment record.
-
+// deployments/testnet.json. Contract IDs are never hardcoded in app
+// code; this script (and the generated clients it produces) is the
+// one place that reads them, straight from the deployment record.
+//
+// GENERATOR: `stellar contract bindings typescript` (stellar-cli's own
+// native command) is deprecated as of stellar-cli 28.1.0 - the version
+// this repo pins for actual contract DEPLOYMENT (deploy/deploy.sh) and
+// keeps pinning here, unchanged. Deprecated or not, that native
+// command only ever emits bindings targeting @stellar/stellar-sdk
+// ^16.0.1, regardless of which stellar-cli version runs it - bumping
+// the CLI pin would not have produced SDK-17-shaped bindings (see
+// issue #37 / this PR's own description for the full reasoning).
+//
+// The actual SDK-17 generator is `stellar-js generate`, a binary
+// bundled INSIDE @stellar/stellar-sdk itself starting at 17.2.0 (it
+// implements the CLI's own plugin convention: an executable named
+// `stellar-*` on PATH, which `stellar contract bindings typescript`
+// will eventually delegate to once the CLI drops its native
+// implementation). Invoked here via `npx --no-install stellar-js`, so
+// it always resolves the exact @stellar/stellar-sdk version this
+// package.json pins (17.2.1) - no separate download, no separate
+// version check needed: npm's own exact pin + lockfile is the real
+// enforcement, the same way @stellar/freighter-api is pinned exactly
+// for an identical "only one copy, no silent drift" reason.
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -14,39 +33,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const appRoot = path.resolve(__dirname, "..");
 
-// deploy/deploy.sh pins this exact version (the real source of truth —
-// also recorded per-run in deployments/testnet.json's own
-// stellar_cli_version field). Bindings generated with a different CLI
-// version aren't guaranteed to match the contracts' actual deployed
-// ABI, so this is a hard check, not a warning.
-const REQUIRED_STELLAR_CLI_VERSION = "28.1.0";
-
 function die(message) {
   console.error(`generate-bindings: ${message}`);
   process.exit(1);
-}
-
-function checkStellarCliVersion() {
-  let output;
-  try {
-    output = execFileSync("stellar", ["--version"], { encoding: "utf8" });
-  } catch {
-    die(
-      "`stellar` CLI not found on PATH. Install stellar-cli " +
-        `${REQUIRED_STELLAR_CLI_VERSION} before regenerating bindings.`,
-    );
-  }
-  const match = output.match(/^stellar (\d+\.\d+\.\d+)/m);
-  const installed = match?.[1];
-  if (installed !== REQUIRED_STELLAR_CLI_VERSION) {
-    die(
-      `stellar CLI ${installed ?? "(unknown version)"} is installed, but bindings ` +
-        `must be generated with ${REQUIRED_STELLAR_CLI_VERSION} (the version ` +
-        "deploy/deploy.sh pins). Install the matching version first " +
-        "(e.g. `brew upgrade stellar-cli`), rather than generating bindings " +
-        "that may not match the deployed contracts' actual ABI.",
-    );
-  }
 }
 
 function loadDeployment() {
@@ -54,16 +43,30 @@ function loadDeployment() {
   if (!existsSync(deploymentPath)) {
     die(`${deploymentPath} not found.`);
   }
-  const deployment = JSON.parse(readFileSync(deploymentPath, "utf8"));
-  if (deployment.stellar_cli_version !== REQUIRED_STELLAR_CLI_VERSION) {
-    console.warn(
-      `generate-bindings: warning: deployments/testnet.json was deployed with ` +
-        `stellar-cli ${deployment.stellar_cli_version}, not ` +
-        `${REQUIRED_STELLAR_CLI_VERSION}. Proceeding, since the installed CLI ` +
-        "version check above is what actually governs bindings generation.",
-    );
+  return JSON.parse(readFileSync(deploymentPath, "utf8"));
+}
+
+// stellar-js generate's own src/ files cross-import each other with an
+// explicit .js extension (`from "./types.js"`), correct per Node's own
+// ESM resolution rules once compiled, and something TypeScript's
+// "bundler" moduleResolution (this project's tsconfig.json) already
+// resolves straight through to the real .ts file - but Turbopack
+// (Next.js's bundler here) does not yet implement that same
+// extension-aliasing webpack has long had; a confirmed, currently-open
+// Turbopack limitation, not a bug in the generated bindings
+// themselves. Stripped here, in the one place these files are
+// produced, rather than hand-edited post-generation (which the next
+// regeneration would silently undo).
+const JS_EXTENSION_IMPORT = /((?:from|import)\s+['"])(\.\.?\/[^'"]+)\.js(['"])/g;
+
+function stripJsExtensionsFromRelativeImports(outDir) {
+  for (const entry of readdirSync(path.join(outDir, "src"))) {
+    if (!entry.endsWith(".ts")) continue;
+    const filePath = path.join(outDir, "src", entry);
+    const source = readFileSync(filePath, "utf8");
+    const fixed = source.replace(JS_EXTENSION_IMPORT, "$1$2$3");
+    if (fixed !== source) writeFileSync(filePath, fixed);
   }
-  return deployment;
 }
 
 function generate(name, contractId, outDir) {
@@ -72,24 +75,26 @@ function generate(name, contractId, outDir) {
     rmSync(outDir, { recursive: true, force: true });
   }
   execFileSync(
-    "stellar",
+    "npx",
     [
-      "contract",
-      "bindings",
-      "typescript",
+      "--no-install",
+      "stellar-js",
+      "generate",
       "--contract-id",
       contractId,
       "--network",
       "testnet",
+      "--contract-name",
+      name,
       "--output-dir",
       outDir,
       "--overwrite",
     ],
-    { stdio: "inherit" },
+    { stdio: "inherit", cwd: appRoot },
   );
+  stripJsExtensionsFromRelativeImports(outDir);
 }
 
-checkStellarCliVersion();
 const deployment = loadDeployment();
 
 const targets = {
