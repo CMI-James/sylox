@@ -268,8 +268,21 @@ impl MarketFactory {
         let asset = storage::get_deployed_asset(&env, &series).ok_or(Error::Unauthorized)?;
         sylox_types::ttl::extend_instance(&env);
 
+        // PR #67 review: fails loudly rather than clamping to 0.
+        // `amount` releasing more than `OpenCover` currently holds, or
+        // a pinned `(kind, version)`'s own `LiveCoverCount` already at
+        // 0, both mean this contract's own bookkeeping has already
+        // drifted out of sync - clamping would hide that, not fix it.
+        // A `Result::Err` here traps the whole call (this contract's
+        // own convention: a #[contractimpl] function's `Err` is a
+        // host-level trap, not a value the caller can inspect), so
+        // nothing written earlier in this same call is left partially
+        // applied.
         let open = storage::get_open_cover(&env, &asset);
-        storage::set_open_cover(&env, &asset, (open - amount).max(0));
+        if amount > open {
+            return Err(Error::AccountingUnderflow);
+        }
+        storage::set_open_cover(&env, &asset, open - amount);
 
         let mut live = storage::get_series_list(&env, &asset);
         if let Some(pos) = live.iter().position(|s| s == series) {
@@ -280,7 +293,10 @@ impl MarketFactory {
         if let Some(pins) = storage::get_pins(&env, &series) {
             for (kind, version) in pins.iter() {
                 let count = storage::get_live_cover_count(&env, &asset, kind, version);
-                storage::set_live_cover_count(&env, &asset, kind, version, count.saturating_sub(1));
+                if count == 0 {
+                    return Err(Error::AccountingUnderflow);
+                }
+                storage::set_live_cover_count(&env, &asset, kind, version, count - 1);
             }
             storage::clear_pins(&env, &series);
         }

@@ -407,3 +407,104 @@ fn day_88_depeg_full_lifecycle_against_real_contracts() {
     assert_eq!(series.sync(), SeriesState::Finalized);
     assert_eq!(fx.usdc_client.balance(&series_address), 0);
 }
+
+/// Regression test (PR #67 review): a series that never has a single
+/// buyer used to stay stuck in `MarketFactory`'s own live list and
+/// `Pins` forever once it reached Expired, because `sync_internal`
+/// only called `release_cover` when `total_reserved` was positive.
+/// Fixed by calling `release_cover` unconditionally (deviation 17 in
+/// the design note, caught by the I26 property test). Opens a series
+/// with no deposit, no quote and no `buy_cover` at all, lets it reach
+/// Expired, syncs it, then confirms it is off the live list, its pin
+/// is cleared, and its slot is genuinely free, not just reported
+/// empty, proved by opening a second series for the same asset right
+/// after (the old bug would have left `MAX_SERIES_PER_ASSET` one slot
+/// short forever, not just reported a stale count).
+#[test]
+fn a_series_with_no_buyer_still_leaves_the_live_list_and_pins_at_expiry() {
+    let env = Env::default();
+    let fx = setup(&env);
+
+    let asset_issuer = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(asset_issuer.clone())
+        .address();
+    fx.oracle
+        .add_asset(&asset_config(&env, &asset, &asset_issuer));
+    fx.registry.register_definition(&depeg_definition(&asset));
+    fx.factory
+        .set_related_sellers(&asset, &Vec::from_array(&env, [asset_issuer.clone()]));
+
+    const KEEPER_BOND: i128 = 50_000_000_000;
+    let keeper = Address::generate(&env);
+    fx.staking.add_keeper(&keeper);
+    fx.usdc_admin_client.mint(&keeper, &KEEPER_BOND);
+    fx.staking.stake(&keeper, &KEEPER_BOND);
+
+    // Only enough history for `is_stale`, never a full 168-slot ring:
+    // no `buy_cover` ever happens in this test.
+    const EPOCH_BASE: u64 = 497_000;
+    env.ledger().set_timestamp((EPOCH_BASE + 1) * EPOCH_SECS);
+    fx.oracle.post_signals(
+        &keeper,
+        &asset,
+        &signal_set(&env, &keeper, EPOCH_BASE, 9_900_000),
+    );
+
+    let now = env.ledger().timestamp();
+    let mut def_versions = Map::new(&env);
+    def_versions.set(EventKind::Depeg, 1u32);
+    let terms = SeriesTerms {
+        asset: asset.clone(),
+        def_versions,
+        settlement: fx.usdc.clone(),
+        start: now,
+        expiry: now + 10_000,
+        claim_window_secs: 100,
+        cap: 1,
+        max_cover_per_buyer: 1,
+        require_holding: false,
+        fee_bps: 0,
+    };
+    let series_address = fx.factory.open_series(&terms);
+    let series = SeriesClient::new(&env, &series_address);
+
+    assert_eq!(fx.factory.series_for(&asset).len(), 1);
+    assert!(fx.factory.has_live_cover(&asset, &EventKind::Depeg, &1));
+
+    // No deposit, no quote, no buy_cover: this series never reserves
+    // a single unit of cover (`total_reserved` stays 0 throughout,
+    // exactly the condition the old bug needed to trigger). Advance
+    // past its own acceptance_end (expiry + depeg_window_secs, the
+    // longest window its one pinned kind carries) so it reaches
+    // Expired, then sync it.
+    env.ledger().set_timestamp(terms.expiry + 259_200 + 1);
+    assert_eq!(series.sync(), SeriesState::Expired);
+
+    // Off the list, pin cleared, open_cover unaffected (it was never
+    // incremented in the first place).
+    assert!(
+        fx.factory.series_for(&asset).is_empty(),
+        "the no-buyer series must be off MarketFactory's own live list after Expired"
+    );
+    assert!(
+        !fx.factory.has_live_cover(&asset, &EventKind::Depeg, &1),
+        "its pin must be cleared, not left live forever"
+    );
+    assert_eq!(fx.factory.open_cover(&asset), 0);
+
+    // The slot is genuinely free, not just reported empty: a fresh
+    // signal for `is_stale`, then a second series for the same asset
+    // opens without TooManySeries.
+    let now2 = env.ledger().timestamp();
+    let fresh_epoch = now2 / EPOCH_SECS - 1;
+    env.ledger().set_timestamp((fresh_epoch + 1) * EPOCH_SECS);
+    fx.oracle.post_signals(
+        &keeper,
+        &asset,
+        &signal_set(&env, &keeper, fresh_epoch, 9_900_000),
+    );
+    let second = fx.factory.open_series(&terms);
+    assert_ne!(second, series_address);
+    assert_eq!(fx.factory.series_for(&asset).len(), 1);
+}

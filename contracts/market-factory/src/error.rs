@@ -52,4 +52,12 @@ pub enum Error {
     /// readable SAC `admin()` is not present in that asset's
     /// related-seller list.
     IssuerNotListed = 408,
+    /// `release_cover` asked to release more than `OpenCover(asset)`
+    /// currently holds, or to decrement a `LiveCoverCount` that is
+    /// already 0 for one of this series' own pinned `(kind, version)`
+    /// pairs. Either means the bookkeeping this call relies on has
+    /// already drifted out of sync somewhere else (PR #67 review,
+    /// I26 follow-up): silently clamping to 0 would hide exactly that
+    /// drift instead of surfacing it.
+    AccountingUnderflow = 409,
 }

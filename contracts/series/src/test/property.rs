@@ -43,6 +43,19 @@ use sylox_types::{
 
 use crate::{Series, SeriesClient};
 
+/// Case count for one of this file's three property tests, adjustable
+/// without touching what CI itself runs: reads the named environment
+/// variable if set and parseable as a `u32`, falls back to `default`
+/// otherwise. CI never sets these, so CI always gets `default` (this
+/// file's own prior case counts). PR #67 review: run locally at a
+/// larger count and post the counts, run times and results on the PR.
+fn cases_from_env(var: &str, default: u32) -> u32 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
 const EPOCH_SECS: u64 = 3_600;
 const SUB_EPOCH_SECS: u64 = 300;
 const KEEPER_BOND: i128 = 50_000_000_000;
@@ -310,7 +323,10 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 20, .. ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: cases_from_env("SERIES_PROPTEST_CASES_CORE", 20),
+        .. ProptestConfig::default()
+    })]
 
     #[test]
     fn i1_i2_i3_i4_i5_i6_i9_i10_i11_i13_never_break(ops in prop::collection::vec(op(), 1..40)) {
@@ -589,7 +605,10 @@ fn run_i24_scenario(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 6, .. ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: cases_from_env("SERIES_PROPTEST_CASES_I24", 6),
+        .. ProptestConfig::default()
+    })]
 
     #[test]
     fn i24_sync_is_idempotent_and_order_independent(
@@ -636,7 +655,10 @@ fn lifecycle_op() -> impl Strategy<Value = LifecycleOp> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 20, .. ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: cases_from_env("SERIES_PROPTEST_CASES_I26", 20),
+        .. ProptestConfig::default()
+    })]
 
     #[test]
     fn i26_live_cover_count_matches_the_live_series_list(ops in prop::collection::vec(lifecycle_op(), 1..24)) {

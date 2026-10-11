@@ -3,13 +3,15 @@
 //!
 //! `open_series` deploys against `DummySeries` below, a minimal
 //! native contract with `Series`' own constructor signature
-//! (`terms, factory, oracle, registry, treasury`) and nothing else -
-//! `Series` itself does not exist yet in this build. This is enough
-//! to test `open_series`'s real deployment step and everything that
-//! depends on a genuinely deployed address (`reserve_cover`,
-//! `release_cover`, `has_live_cover`), not just its validation chain.
-//! The full day-88 integration scenario against the real `Series`
-//! lands once that contract exists.
+//! (`terms, factory, oracle, registry, treasury`) and nothing else,
+//! so this suite can test `open_series`'s real deployment step and
+//! everything that depends on a genuinely deployed address
+//! (`reserve_cover`, `release_cover`, `has_live_cover`) without
+//! reaching across crates for the real `Series` - that full
+//! multi-contract scenario (and the real `Series`' own regression
+//! test for the no-buyer-series bug below) lives in
+//! `series::test::integration` instead, alongside `Series`' own
+//! other real-contract tests.
 
 extern crate std;
 
@@ -693,4 +695,63 @@ fn release_cover_rejects_a_series_this_factory_never_deployed() {
     let stranger = Address::generate(&env);
     let result = fx.client.try_release_cover(&stranger, &1);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+/// PR #67 review: `release_cover` must fail loudly, not clamp to 0,
+/// when asked to release more than `OpenCover(asset)` currently holds.
+/// That exact gap is what silently stranded the no-buyer series in
+/// the live list before this fix (`AccountingUnderflow`, deviation 17
+/// in the design note).
+#[test]
+fn release_cover_rejects_releasing_more_than_open_cover() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let (asset, _issuer) = listed_asset(&env, &fx);
+    fx.oracle.set_median_liquidity(&asset, &1_000_000_000); // cap 250,000,000
+    let terms = valid_terms(&env, &fx, &asset);
+    let series = fx.client.open_series(&terms);
+
+    fx.client.reserve_cover(&series, &100_000_000);
+    assert_eq!(fx.client.open_cover(&asset), 100_000_000);
+
+    let result = fx.client.try_release_cover(&series, &200_000_000);
+    assert_eq!(result, Err(Ok(Error::AccountingUnderflow)));
+
+    // The whole call traps and rolls back: nothing written earlier in
+    // this same invocation (there was nothing to write before the
+    // check here, but the point holds generally) is left applied.
+    assert_eq!(fx.client.open_cover(&asset), 100_000_000);
+    assert_eq!(fx.client.series_for(&asset).len(), 1);
+    assert!(fx.client.has_live_cover(&asset, &EventKind::Depeg, &1));
+}
+
+/// PR #67 review: the companion failure mode, a pinned `(kind,
+/// version)`'s own `LiveCoverCount` already at 0 when `release_cover`
+/// tries to decrement it - not reachable through the public API alone
+/// (every `open_series`/`release_cover` pair keeps it consistent), so
+/// forced directly via `crate::storage`, the same way this crate's
+/// own private-module test access already works elsewhere in this
+/// file (`crate::storage::get_config`).
+#[test]
+fn release_cover_rejects_a_pin_count_already_at_zero() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let (asset, _issuer) = listed_asset(&env, &fx);
+    fx.oracle.set_median_liquidity(&asset, &1_000_000_000);
+    let terms = valid_terms(&env, &fx, &asset);
+    let series = fx.client.open_series(&terms);
+
+    env.as_contract(&fx.contract_id, || {
+        crate::storage::set_live_cover_count(&env, &asset, EventKind::Depeg, 1, 0);
+    });
+
+    let result = fx.client.try_release_cover(&series, &0);
+    assert_eq!(result, Err(Ok(Error::AccountingUnderflow)));
+
+    // Rolled back: still deployed, still on the live list - the
+    // rejected call changed nothing (`LiveCoverCount` itself is left
+    // deliberately corrupted by this test's own forced setup above,
+    // not by anything `release_cover` did, so it is not re-asserted
+    // here).
+    assert_eq!(fx.client.series_for(&asset).len(), 1);
 }
