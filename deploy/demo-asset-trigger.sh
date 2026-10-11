@@ -440,14 +440,40 @@ compute_supply_change_bps() {
 # format the PR's own dry-run evidence uses: "already done (tx ...)"
 # or "will submit (...)". Always printed, dry-run or not, so a real
 # run's own log carries the same plan a --dry-run would have shown,
-# right before actually doing it.
+# right before actually doing it. Also records each label's own
+# status, so note_submission (below) can check a step's plan against
+# what it actually did.
+declare -A PLAN_STATUS_BY_LABEL=()
 plan() {
   local label="$1" status="$2" detail="${3:-}"
+  PLAN_STATUS_BY_LABEL["$label"]="$status"
   if [[ -n "$detail" ]]; then
     log "[plan] $label: $status ($detail)"
   else
     log "[plan] $label: $status"
   fi
+}
+
+# One gate per step (review finding - a real run caught a step that
+# submitted a real transaction after its own plan line said "already
+# done"): every real submission in this script calls note_submission
+# right after it lands, naming the exact label plan() was just called
+# with for that same step. Dies immediately if that label's most
+# recent plan status was NOT "will submit" - this is the guard that
+# makes the one-gate-per-step rule a checked invariant, not just a
+# convention later code has to remember to follow. Also the single
+# place every submitted transaction hash is collected
+# (SUBMITTED_TX_HASHES), so the final report never has to go back to
+# Horizon to find a hash this run's own output already had.
+declare -A SUBMITTED_TX_HASHES=()
+note_submission() {
+  local label="$1" tx_hash="$2"
+  local status="${PLAN_STATUS_BY_LABEL[$label]:-}"
+  [[ "$status" == "will submit" ]] \
+    || die "INTERNAL: $label just submitted a real transaction ($tx_hash), but its own plan said \"$status\", not \"will submit\". This should never happen; stopping before anything else runs so this can be investigated rather than silently repeated."
+  [[ -n "$tx_hash" ]] \
+    || die "INTERNAL: $label submitted a real transaction but no hash was captured for it"
+  SUBMITTED_TX_HASHES["$label"]="$tx_hash"
 }
 
 log "[1/7] DEMOUSD holder identity"
@@ -484,6 +510,20 @@ if [[ -n "$HOLDER_ADDR" ]]; then
     mv "$tmp_demo_record" "$DEMO_RECORD"
   fi
 
+  # One gate per step (review finding - a real run): this used to
+  # compute HOLDER_TRUSTLINE_EXISTS only to choose the PLAN line's
+  # wording, then run change-trust unconditionally whenever
+  # ! DRY_RUN - so a real run submitted change-trust even when the
+  # plan, printed moments earlier, said "already done". Confirmed
+  # harmless in the real run that caught this (a repeat change-trust
+  # to an already-open trustline with the same limit and flags is a
+  # genuine Stellar no-op; the trustline's own authorization state was
+  # unchanged before and after), but it is still a real signed
+  # transaction the plan did not predict. Every step now decides ONCE
+  # whether it is done, in an if/else whose "will submit" branch is
+  # the ONLY place that submits - dry-run and real mode share that
+  # same branch, gated only by DRY_RUN inside it, the same shape every
+  # other step in this script already uses.
   HOLDER_TRUSTLINE_EXISTS=0
   account_json_step1="$(curl -sSf "$HORIZON_URL/accounts/$HOLDER_ADDR" 2>&1)" || account_json_step1=""
   if [[ -n "$account_json_step1" ]] && echo "$account_json_step1" | jq -e --arg code "$DEMO_CODE" --arg issuer "$DEMO_ISSUER_ADDR" \
@@ -494,15 +534,16 @@ if [[ -n "$HOLDER_ADDR" ]]; then
     plan "trustline ($DEMO_CODE)" "already done"
   else
     plan "trustline ($DEMO_CODE)" "will submit" "change-trust"
-  fi
-  if (( ! DRY_RUN )); then
-    log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
-    # A repeat change-trust to an already-open trustline is a harmless
-    # no-op on Stellar (same limit, same flags), so no "already
-    # exists" branch is needed here, unlike the SAC/asset-registration
-    # steps.
-    "$STELLAR_BIN" tx new change-trust --source-account "$HOLDER" \
-      --line "$DEMO_CODE:$DEMO_ISSUER_ADDR" --network testnet >/dev/null
+    if (( ! DRY_RUN )); then
+      log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
+      trust_out="$("$STELLAR_BIN" tx new change-trust --source-account "$HOLDER" \
+        --line "$DEMO_CODE:$DEMO_ISSUER_ADDR" --network testnet 2>&1)" || die "opening $HOLDER's trustline failed:
+$trust_out"
+      echo "$trust_out"
+      TRUSTLINE_TX_HASH="$(echo "$trust_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+      log "trustline transaction: $TRUSTLINE_TX_HASH"
+      note_submission "trustline ($DEMO_CODE)" "$TRUSTLINE_TX_HASH"
+    fi
   fi
 else
   plan "trustline ($DEMO_CODE)" "cannot check yet" "holder identity does not exist locally"
@@ -533,9 +574,13 @@ else
     if (( ! DRY_RUN )); then
       HOLDER_BALANCE=1000000000   # 100 units at SCALE 1e7, arbitrary plausible size, enough to partially clawback.
       log "Issuing $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
-      "$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-        --network testnet -- mint --to "$HOLDER_ADDR" --amount "$HOLDER_BALANCE" >/dev/null
-      log "minted $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
+      mint_out="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+        --network testnet -- mint --to "$HOLDER_ADDR" --amount "$HOLDER_BALANCE" 2>&1)" || die "minting to $HOLDER_ADDR failed:
+$mint_out"
+      echo "$mint_out"
+      MINT_TX_HASH="$(echo "$mint_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+      log "minted $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR: $MINT_TX_HASH"
+      note_submission "mint" "$MINT_TX_HASH"
     fi
   fi
 fi
@@ -583,6 +628,7 @@ $revoke_out"
         echo "$revoke_out"
         REVOKE_TX_HASH="$(echo "$revoke_out" | grep -oE '[a-f0-9]{64}' | head -1)"
         log "revocation transaction: $REVOKE_TX_HASH"
+        note_submission "revoke" "$REVOKE_TX_HASH"
       fi
       ;;
     false)
@@ -629,6 +675,7 @@ $clawback_out"
       echo "$clawback_out"
       CLAWBACK_TX_HASH="$(echo "$clawback_out" | grep -oE '[a-f0-9]{64}' | head -1)"
       log "clawback transaction: $CLAWBACK_TX_HASH"
+      note_submission "clawback" "$CLAWBACK_TX_HASH"
 
       # Read the REAL amount moved from Horizon's own effects for this
       # transaction, not CLAWBACK_REQUEST: that is what was asked for,
@@ -735,7 +782,9 @@ if [[ -n "$TRIGGER_EPOCH" ]]; then
       die "post_signals(DEMOUSD, $epoch) failed:
 $post_out"
     fi
-    log "epoch $epoch posted (plain history, real supply=$supply_now, supply_change_bps=$supply_change_bps)"
+    backfill_tx_hash="$(echo "$post_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+    log "epoch $epoch posted (plain history, real supply=$supply_now, supply_change_bps=$supply_change_bps): $backfill_tx_hash"
+    note_submission "backfill epoch $epoch" "$backfill_tx_hash"
   done
 
   # The explicit gap fill: supply equal to the LAST BACKFILLED hour's
@@ -764,7 +813,9 @@ $gap_post_out"
         fi
         log "epoch $GAP_EPOCH already posted; skipping"
       else
-        log "epoch $GAP_EPOCH posted (gap fill, supply carried forward=$gap_supply, supply_change_bps=0)"
+        gap_tx_hash="$(echo "$gap_post_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+        log "epoch $GAP_EPOCH posted (gap fill, supply carried forward=$gap_supply, supply_change_bps=0): $gap_tx_hash"
+        note_submission "gap-fill epoch $GAP_EPOCH" "$gap_tx_hash"
       fi
     fi
   fi
@@ -871,8 +922,10 @@ $trigger_out"
       fi
     else
       echo "$trigger_out"
-      log "triggering signal posted for epoch $TRIGGER_EPOCH: clawback_amount=$CLAWBACK_AMOUNT (real), supply=$supply_at_trigger (real), supply_change_bps=$trigger_supply_change_bps (real), auth_revocations=1"
+      trigger_tx_hash="$(echo "$trigger_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+      log "triggering signal posted for epoch $TRIGGER_EPOCH: clawback_amount=$CLAWBACK_AMOUNT (real), supply=$supply_at_trigger (real), supply_change_bps=$trigger_supply_change_bps (real), auth_revocations=1, tx=$trigger_tx_hash"
       log "inputs (with real tx hashes): $inputs_json"
+      note_submission "triggering post" "$trigger_tx_hash"
     fi
   fi
 fi
@@ -885,3 +938,16 @@ fi
 PENDING_UNTIL=$(( $(date +%s) + 7200 ))
 log "This signal is Pending until $(date -u -r "$PENDING_UNTIL" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$PENDING_UNTIL" +%Y-%m-%dT%H:%M:%SZ) UTC (signal_dispute_secs, 2h), then effectively Final."
 log "propose_tier1 reads effectively-Final slots (ADR-008): this script does NOT wait for that; run deploy/demo-asset-propose.sh testnet once that time has passed."
+
+# Every real transaction this run actually submitted, by label, with
+# its hash - collected by note_submission as each one landed, so this
+# summary is a direct report of what happened, not a re-derivation.
+# Empty when every step read "already done" (a fully resumed run).
+if (( ${#SUBMITTED_TX_HASHES[@]} > 0 )); then
+  log "Submitted ${#SUBMITTED_TX_HASHES[@]} real transaction(s) this run:"
+  for label in "${!SUBMITTED_TX_HASHES[@]}"; do
+    log "  $label: ${SUBMITTED_TX_HASHES[$label]}"
+  done
+else
+  log "Submitted 0 real transactions this run (everything was already done)."
+fi
