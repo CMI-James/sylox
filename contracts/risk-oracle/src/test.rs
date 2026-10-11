@@ -26,11 +26,13 @@ struct Fixture<'a> {
 fn setup(env: &Env) -> Fixture<'_> {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(env, &contract_id);
     let governor = Address::generate(env);
     let registry = Address::generate(env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(env, &contract_id);
     Fixture {
         client,
         staking,
@@ -149,17 +151,7 @@ fn find_slot_by_epoch(
         .unwrap_or_else(|| std::panic!("epoch {epoch} not found in ring()"))
 }
 
-// -- initialize / add_asset / update_asset / disable_asset --
-
-#[test]
-fn initialize_once_then_rejects_a_second_call() {
-    let env = Env::default();
-    let fx = setup(&env);
-    let result = fx
-        .client
-        .try_initialize(&fx.governor, &fx.registry, &fx.staking);
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}
+// -- add_asset / update_asset / disable_asset --
 
 #[test]
 fn add_asset_requires_governor_auth() {
@@ -601,7 +593,14 @@ fn window_reads_the_right_epochs_after_wrapping_twice() {
 fn write_ring_slot_refuses_to_overwrite_a_newer_epoch() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register(RiskOracle, ());
+    let contract_id = env.register(
+        RiskOracle,
+        (
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ),
+    );
     let asset = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
@@ -635,7 +634,14 @@ fn write_ring_slot_refuses_to_overwrite_a_newer_epoch() {
 fn get_ring_packed_rejects_a_header_that_does_not_match() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register(RiskOracle, ());
+    let contract_id = env.register(
+        RiskOracle,
+        (
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ),
+    );
     let asset = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
@@ -1457,10 +1463,12 @@ fn an_overturned_epoch_is_never_rewarded() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -1576,10 +1584,12 @@ fn resolve_signal_dispute_keeper_wins_finalizes_the_slot() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
 
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
@@ -1605,10 +1615,12 @@ fn resolve_signal_dispute_disputer_wins_reopens_the_epoch() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
 
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
@@ -1655,10 +1667,12 @@ fn setup_disputed_epoch(
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(env, &contract_id);
     let registry = Address::generate(env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(env, &contract_id);
 
     let governor_client = crate::mocks::MockGovernorClient::new(env, &governor);
     let committee = Address::generate(env);
@@ -2149,10 +2163,12 @@ fn newest_epoch_survives_an_overturn_of_the_newest_slot() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     governor_client.set_committee(&Address::generate(&env));
 
@@ -2176,7 +2192,7 @@ fn newest_epoch_survives_an_overturn_of_the_newest_slot() {
     );
 }
 
-// -- Required error coverage: Unauthorized, NotInitialized, MathOverflow --
+// -- Required error coverage: Unauthorized, MathOverflow --
 
 /// `Error::Unauthorized` (3) is never returned by any production call
 /// site (confirmed: no `Error::Unauthorized` construction anywhere
@@ -2196,32 +2212,17 @@ fn newest_epoch_survives_an_overturn_of_the_newest_slot() {
 fn missing_auth_traps_natively_rather_than_returning_unauthorized() {
     let env = Env::default();
     let staking = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let governor = Address::generate(&env);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let asset = Address::generate(&env);
 
     // No mock_all_auths(): the registry never actually signs this call.
     client.set_event_in_progress(&asset, &true);
-}
-
-/// `Error::NotInitialized` (2), from `require_config` (via `try_` so the
-/// panic-on-`Err` client wrapper is not used), on a contract that has
-/// never had `initialize` called. Every method gated by
-/// `require_config` shares this one guard; `add_asset` exercises it
-/// here as a representative call.
-#[test]
-fn add_asset_before_initialize_is_not_initialized() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
-    let asset = Address::generate(&env);
-    let issuer = Address::generate(&env);
-    let result = client.try_add_asset(&asset_config(&env, &asset, &issuer));
-    assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
 
 /// `Error::MathOverflow` (5), from `aggregate_from_ring`'s checked sum
@@ -2535,10 +2536,12 @@ fn finality_keeps_advancing_past_an_overturned_epoch_that_is_never_reposted() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -2579,10 +2582,12 @@ fn finality_keeps_advancing_past_an_unresolved_dispute() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -2798,10 +2803,12 @@ fn an_overturned_and_reposted_epoch_emits_signals_final_exactly_once() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -2854,10 +2861,12 @@ fn resolve_signal_dispute_keeper_wins_emits_signals_final_once_at_resolution_nev
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -3186,10 +3195,12 @@ fn every_event_uses_the_sylox_event_name_asset_topic_convention() {
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let governor_client = crate::mocks::MockGovernorClient::new(&env, &governor);
     let committee = Address::generate(&env);
     governor_client.set_committee(&committee);
@@ -3307,11 +3318,13 @@ fn version_reads_contract_version_constant() {
 fn upgrade_without_governor_auth_traps() {
     let env = Env::default();
     let staking = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let governor = Address::generate(&env);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
 
     let new_wasm_hash = env.upload(RiskOracle);
     // No mock_all_auths(): the governor never actually signs this call.
@@ -3387,12 +3400,90 @@ fn migrate_cannot_run_twice() {
 fn migrate_without_governor_auth_traps() {
     let env = Env::default();
     let staking = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let governor = Address::generate(&env);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
 
     // No mock_all_auths(): the governor never actually signs this call.
     client.migrate();
+}
+
+/// Issue #21: with a constructor instead of a separate `initialize`
+/// call, there is no on-chain way to invoke construction a second time
+/// against an already-deployed address - a fresh `env.register` always
+/// allocates a new address, and the real deployer flow
+/// (`Env::deployer().with_address(...).deploy_contract(...)`) runs the
+/// constructor exactly once, atomically with deployment itself.
+///
+/// The one thing that CAN re-run a constructor against an address that
+/// already holds this contract is `Env::register_at`, a testutils-only
+/// convenience: per its own doc comment, "Registering a contract that
+/// is already registered replaces it... the new contract's constructor
+/// will be called again during re-registration. That behavior only
+/// exists for this test utility and is not reproducible on-chain." It
+/// is not an authenticatable front-run either - `register_at`, like
+/// `register`, always mocks authorization for the constructor call, so
+/// it proves nothing about `require_auth` and cannot be used to invoke
+/// a constructor as some other caller would have to on a real network.
+///
+/// What this test demonstrates instead: `register_at`'s re-registration
+/// genuinely replaces the whole config in storage (not just the
+/// address's code), by re-registering RiskOracle at the same contract
+/// id with a second, different governor, and showing that a
+/// governor-gated call now runs under the SECOND governor's authority,
+/// not the first. That is real, observable behavior of the test
+/// harness - never something a deployed contract on-chain can be made
+/// to do.
+#[test]
+fn register_at_can_replace_config_but_only_as_a_testutils_convenience() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let staking = env.register(MockStaking, ());
+    let first_governor = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let contract_id = env.register(
+        RiskOracle,
+        (first_governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
+
+    // Re-register the same address with a different governor. On-chain
+    // this has no equivalent at all; here it is purely a testutils
+    // convenience that reruns __constructor and overwrites Config.
+    let second_governor = Address::generate(&env);
+    env.register_at(
+        &contract_id,
+        RiskOracle,
+        (second_governor.clone(), registry.clone(), staking.clone()),
+    );
+
+    let asset = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let cfg = asset_config(&env, &asset, &issuer);
+    client.add_asset(&cfg);
+
+    // The call succeeded under mock_all_auths() regardless of which
+    // governor is configured, so success alone would prove nothing.
+    // What proves the config was really replaced is WHICH address
+    // `require_auth` recorded the authorization against: the second
+    // governor, never the first.
+    assert_eq!(
+        env.auths(),
+        [(
+            second_governor,
+            soroban_sdk::testutils::AuthorizedInvocation {
+                function: soroban_sdk::testutils::AuthorizedFunction::Contract((
+                    client.address.clone(),
+                    soroban_sdk::symbol_short!("add_asset"),
+                    (cfg,).into_val(&env),
+                )),
+                sub_invocations: std::vec![],
+            }
+        )]
+    );
 }

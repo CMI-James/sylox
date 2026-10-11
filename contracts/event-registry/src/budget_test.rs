@@ -166,15 +166,37 @@ fn setup(env: &Env) -> (EventRegistryClient<'_>, risk_oracle::RiskOracleClient<'
     env.mock_all_auths();
     let governor = Address::generate(env);
     let staking = env.register(MockStaking, ());
-    let oracle_id = env.register(risk_oracle::RiskOracle, ());
-    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
-    let registry_id = env.register(EventRegistry, ());
-    oracle.initialize(&governor, &registry_id, &staking);
-
     let factory = Address::generate(env);
     let usdc = Address::generate(env);
+
+    // `EventRegistry`'s constructor needs `oracle_id` and
+    // `RiskOracle`'s needs `registry_id`, so neither can be
+    // registered (with its real constructor) before the other
+    // exists. `Address::generate` hands out both addresses up front,
+    // breaking the cycle, matching `staking::test`'s own `setup`
+    // convention for the same problem.
+    let registry_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
+
+    env.register_at(
+        &oracle_id,
+        risk_oracle::RiskOracle,
+        (governor.clone(), registry_id.clone(), staking.clone()),
+    );
+    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
+
+    env.register_at(
+        &registry_id,
+        EventRegistry,
+        (
+            governor.clone(),
+            oracle_id.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let client = EventRegistryClient::new(env, &registry_id);
-    client.initialize(&governor, &oracle_id, &staking, &factory, &usdc);
 
     (client, oracle)
 }
@@ -221,15 +243,32 @@ fn setup_with_governor(
     governor_client.set_committee(&committee);
 
     let staking = env.register(MockStaking, ());
-    let oracle_id = env.register(risk_oracle::RiskOracle, ());
-    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
-    let registry_id = env.register(EventRegistry, ());
-    oracle.initialize(&governor, &registry_id, &staking);
-
     let factory = Address::generate(env);
     let usdc = Address::generate(env);
+
+    // Same registry/oracle construction cycle as `setup` above.
+    let registry_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
+
+    env.register_at(
+        &oracle_id,
+        risk_oracle::RiskOracle,
+        (governor.clone(), registry_id.clone(), staking.clone()),
+    );
+    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
+
+    env.register_at(
+        &registry_id,
+        EventRegistry,
+        (
+            governor.clone(),
+            oracle_id.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let client = EventRegistryClient::new(env, &registry_id);
-    client.initialize(&governor, &oracle_id, &staking, &factory, &usdc);
 
     (client, oracle, committee)
 }

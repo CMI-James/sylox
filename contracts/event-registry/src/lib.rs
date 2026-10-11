@@ -132,17 +132,20 @@ const MIGRATED_TO_KEY: Symbol = symbol_short!("MIGRATE");
 
 #[contractimpl]
 impl EventRegistry {
-    pub fn initialize(
+    /// Issue #21: a constructor, not a separate `initialize` call -
+    /// see `RiskOracle::__constructor`'s own doc comment for why. Only
+    /// stores addresses and config; never calls another contract (the
+    /// other three may not exist yet when this runs, since every
+    /// address here is computed in advance from a deterministic salt,
+    /// deploy/deploy.sh's own "Constructor flow" section).
+    pub fn __constructor(
         env: Env,
         governor: Address,
         oracle: Address,
         staking: Address,
         factory: Address,
         usdc: Address,
-    ) -> Result<(), Error> {
-        if storage::get_config(&env).is_some() {
-            return Err(Error::AlreadyInitialized);
-        }
+    ) {
         storage::set_config(
             &env,
             &Config {
@@ -153,7 +156,6 @@ impl EventRegistry {
                 usdc,
             },
         );
-        Ok(())
     }
 
     /// Issue #12. The currently deployed code's own version, bumped by

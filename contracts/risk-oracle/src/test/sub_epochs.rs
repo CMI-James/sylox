@@ -24,10 +24,12 @@ fn setup_with_governor_and_asset(env: &Env) -> (RiskOracleClient<'_>, Address, A
     env.mock_all_auths();
     let staking = env.register(crate::mocks::MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(env, &contract_id);
     let registry = Address::generate(env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(env, &contract_id);
 
     let asset = Address::generate(env);
     let issuer = Address::generate(env);
@@ -1340,10 +1342,12 @@ fn keeper_pay_never_pays_the_overturned_post_and_pays_the_repost_once() {
     env.mock_all_auths();
     let staking = env.register(crate::mocks::MockStaking, ());
     let governor = env.register(MockGovernor, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let committee = Address::generate(&env);
     crate::mocks::MockGovernorClient::new(&env, &governor).set_committee(&committee);
     let asset = Address::generate(&env);

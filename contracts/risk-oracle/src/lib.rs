@@ -161,16 +161,22 @@ pub struct RiskOracle;
 
 #[contractimpl]
 impl RiskOracle {
-    /// technical-doc.md Section 12.1.
-    pub fn initialize(
-        env: Env,
-        governor: Address,
-        registry: Address,
-        staking: Address,
-    ) -> Result<(), Error> {
-        if env.storage().instance().has(&CONFIG_KEY) {
-            return Err(Error::AlreadyInitialized);
-        }
+    /// Issue #21: a constructor, not a separate `initialize` call. The
+    /// old two-step "deploy, then invoke initialize" flow left a real
+    /// window on-chain where this contract existed with no config at
+    /// all, and `initialize` had no way to tell a legitimate deployer's
+    /// call from a front-runner's (both are unauthenticated against a
+    /// not-yet-configured contract - there is no governor to check
+    /// `require_auth` against yet). A constructor runs atomically with
+    /// deployment itself: the contract is never live without this
+    /// config already set, so there is no window to front-run at all.
+    /// `registry`/`staking` are the OTHER contracts' own addresses,
+    /// computed in advance from a deterministic salt (deploy/
+    /// deploy.sh's own "Constructor flow" section) - they do not need
+    /// to exist yet when this constructor runs, since it only stores
+    /// them, never calls them (see this constructor's own doc comment
+    /// below for why).
+    pub fn __constructor(env: Env, governor: Address, registry: Address, staking: Address) {
         env.storage().instance().set(
             &CONFIG_KEY,
             &Config {
@@ -180,7 +186,6 @@ impl RiskOracle {
             },
         );
         storage::set_formula(&env, &score::default_formula(&env));
-        Ok(())
     }
 
     /// Issue #12. The currently deployed code's own version, bumped by
