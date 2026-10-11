@@ -1,5 +1,6 @@
 import { eventRegistryClient } from "./contracts/event-registry";
 import type { CureProgress } from "./contracts/event-registry";
+import { extractErrorCode, describeFinalizeError, describeCheckpointCureError } from "./contract-errors";
 
 export interface WriteResult<T> {
   result: T;
@@ -42,14 +43,18 @@ export interface Prepared<T> {
 /**
  * Two explicit steps, not one call, so the UI can show the simulated
  * result BEFORE ever asking the wallet to sign anything: `prepare*`
- * constructs the transaction (which auto-simulates) and throws a
- * plain-language error immediately if the contract would reject the
- * call - a wrong state, the challenge window still open, etc. Only
- * once the caller has seen that outcome and explicitly confirms does
- * `confirm*` ask the wallet to sign and actually send it. Both
- * require an address up front (never simulate against a placeholder
- * account) - the caller (components/WriteActionButton.tsx) only ever
- * calls these once a wallet is connected.
+ * constructs the transaction (which auto-simulates) and throws
+ * immediately if the contract would reject the call - a wrong state,
+ * the challenge window still open, etc. Only once the caller has seen
+ * that outcome and explicitly confirms does `confirm*` ask the wallet
+ * to sign and actually send it. Both require an address up front
+ * (never simulate against a placeholder account) - the caller
+ * (components/WriteActionButton.tsx) only ever calls these once a
+ * wallet is connected.
+ *
+ * The thrown message is always plain, user-facing copy from
+ * lib/contract-errors.ts - never the raw contract error (that error's
+ * own Rust doc comment, decoded verbatim by the SDK) read directly.
  */
 
 export async function prepareCheckpointCure(
@@ -59,7 +64,7 @@ export async function prepareCheckpointCure(
   const registry = eventRegistryClient(address);
   const tx = await registry.checkpoint_cure({ event_id: eventId });
   if (tx.result.isErr()) {
-    throw new Error(describeCheckpointError(tx.result.unwrapErr().message));
+    throw new Error(`Couldn't check the cure progress: ${describeCheckpointCureError(extractErrorCode(tx))}`);
   }
   return { tx, preparedFor: address };
 }
@@ -75,7 +80,9 @@ export async function confirmCheckpointCure(
   }
   const sent = await prepared.tx.signAndSend({ signTransaction: signer.signTransaction });
   if (sent.result.isErr()) {
-    throw new Error(describeCheckpointError(sent.result.unwrapErr().message));
+    throw new Error(
+      `Couldn't check the cure progress: ${describeCheckpointCureError(extractErrorCode(sent.assembled))}`,
+    );
   }
   return {
     result: sent.result.unwrap(),
@@ -90,7 +97,7 @@ export async function prepareFinalize(
   const registry = eventRegistryClient(address);
   const tx = await registry.finalize({ event_id: eventId });
   if (tx.result.isErr()) {
-    throw new Error(describeFinalizeError(tx.result.unwrapErr().message));
+    throw new Error(`Couldn't finalize this event: ${describeFinalizeError(extractErrorCode(tx))}`);
   }
   return { tx, preparedFor: address };
 }
@@ -106,19 +113,7 @@ export async function confirmFinalize(
   }
   const sent = await prepared.tx.signAndSend({ signTransaction: signer.signTransaction });
   if (sent.result.isErr()) {
-    throw new Error(describeFinalizeError(sent.result.unwrapErr().message));
+    throw new Error(`Couldn't finalize this event: ${describeFinalizeError(extractErrorCode(sent.assembled))}`);
   }
   return { result: undefined, txHash: sent.sendTransactionResponse?.hash ?? "" };
-}
-
-// The contract's own error messages (from its #[contracterror] enum,
-// Section 14) are already plain words written for exactly this
-// purpose - these just add the specific action's context rather than
-// replacing the message with something invented.
-function describeCheckpointError(message: string): string {
-  return `Couldn't check the cure progress: ${message}`;
-}
-
-function describeFinalizeError(message: string): string {
-  return `Couldn't finalize this event: ${message}`;
 }

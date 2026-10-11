@@ -2,6 +2,7 @@ import { riskOracleClient } from "./contracts/risk-oracle";
 import { eventRegistryClient } from "./contracts/event-registry";
 import { assetDisplayName } from "./contracts/token";
 import { riskBandFor } from "./band";
+import { extractErrorCode, describeScoreError, describeCoverGateError } from "./contract-errors";
 import type { RiskBand } from "@sylox/ui/risk-bands";
 import type { RingSlot, SlotState, SubEpoch } from "./contracts/risk-oracle";
 import type { CoverGate, EventKind } from "./contracts/event-registry";
@@ -101,7 +102,7 @@ async function fetchHeader(
 
   const scoreResult = scoreTx.result;
   if (scoreResult.isErr()) {
-    throw new Error(`RiskOracle.score returned a contract error: ${scoreResult.unwrapErr().message}`);
+    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
   }
   const riskScore = scoreResult.unwrap();
   const hasRealScore = riskScore.epoch !== BigInt(0);
@@ -191,7 +192,7 @@ export async function fetchConfirmed(
 
   const scoreResult = scoreTx.result;
   if (scoreResult.isErr()) {
-    throw new Error(`RiskOracle.score returned a contract error: ${scoreResult.unwrapErr().message}`);
+    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
   }
   const riskScore = scoreResult.unwrap();
 
@@ -560,7 +561,7 @@ export async function fetchCoverGate(
 
   const scoreResult = scoreTx.result;
   if (scoreResult.isErr()) {
-    throw new Error(`RiskOracle.score returned a contract error: ${scoreResult.unwrapErr().message}`);
+    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
   }
   const band = scoreResult.unwrap().band.tag;
   if (band === "Distress" || band === "Event") {
@@ -569,7 +570,7 @@ export async function fetchCoverGate(
 
   const gateResult = gateTx.result;
   if (gateResult.isErr()) {
-    throw new Error(`EventRegistry.cover_gate returned a contract error: ${gateResult.unwrapErr().message}`);
+    throw new Error(`Couldn't check cover sale status: ${describeCoverGateError(extractErrorCode(gateTx))}`);
   }
   const gate = gateResult.unwrap();
   return { gate: gate.tag, label: COVER_GATE_LABEL[gate.tag] };
