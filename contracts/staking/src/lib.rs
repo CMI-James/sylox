@@ -65,7 +65,7 @@ mod events;
 mod params;
 mod storage;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, IntoVal, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 use sylox_types::{BondKey, EndpointStatus, KeeperInfo, ProbeReport, ReporterInfo, TreasuryBucket};
 
 use clients::TreasuryClient;
@@ -1183,43 +1183,21 @@ impl Staking {
     /// into `Treasury`'s `Slashed` bucket, the treasury half of a
     /// `slash`/`forfeit_bond` split (lead decision: one home for each
     /// kind of money, protocol funds live only in `Treasury`).
-    /// `Treasury.deposit`'s own body calls `from.require_auth()`
-    /// where `from` is this contract's address, then transfers via
-    /// the USDC SAC, which itself calls `from.require_auth()` again,
-    /// a SECOND hop past this contract's own direct call into
-    /// `Treasury.deposit` (the first hop is automatically authorized;
-    /// Soroban auto-authorizes only a contract's own DIRECT calls,
-    /// never a call two hops down). `authorize_as_current_contract`
-    /// pre-authorizes that second hop (the SAC's `transfer`) on this
-    /// contract's behalf, matching the pattern technical-doc.md
-    /// Section 12.7 describes for `Series.buy_cover`'s fee deposit.
+    ///
+    /// markets design note, Section 9: the authorize-as-self logic
+    /// this needs (Soroban auto-authorizes only a contract's own
+    /// DIRECT calls, never `Treasury.deposit`'s own second-hop SAC
+    /// `transfer`) moved into `sylox_types::treasury_deposit`, shared
+    /// with `Series.buy_cover`'s own fee deposit (technical-doc.md
+    /// Section 12.7), so this wrapper stays bucket-specific while the
+    /// mechanism itself has one implementation, not two.
     fn deposit_treasury_share(env: &Env, config: &Config, amount: i128) {
-        if amount <= 0 {
-            return;
-        }
-        let here = env.current_contract_address();
-        env.authorize_as_current_contract(soroban_sdk::vec![
+        sylox_types::treasury_deposit::deposit_treasury_share(
             env,
-            soroban_sdk::auth::InvokerContractAuthEntry::Contract(
-                soroban_sdk::auth::SubContractInvocation {
-                    context: soroban_sdk::auth::ContractContext {
-                        contract: config.usdc.clone(),
-                        fn_name: Symbol::new(env, "transfer"),
-                        args: soroban_sdk::vec![
-                            env,
-                            here.into_val(env),
-                            config.treasury.clone().into_val(env),
-                            amount.into_val(env),
-                        ],
-                    },
-                    sub_invocations: soroban_sdk::vec![env],
-                }
-            )
-        ]);
-        TreasuryClient::new(env, &config.treasury).deposit(
-            &here,
-            &TreasuryBucket::Slashed,
-            &amount,
+            &config.usdc,
+            &config.treasury,
+            TreasuryBucket::Slashed,
+            amount,
         );
     }
 }
