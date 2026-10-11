@@ -53,6 +53,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  extend-ttl-jq-test:
+    name: deploy/extend-ttl.sh jq precedence regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-extend-ttl-jq.sh
+
   test:
     name: cargo test --workspace
     runs-on: ubuntu-latest
@@ -157,7 +164,7 @@ jobs:
     # passed - a broken contract build or a failing Rust test on main
     # blocks this exactly like it blocks everything else.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test]
     # One deploy at a time, in order - a second push landing while the
     # first is still deploying queues behind it instead of racing it
     # (never cancel-in-progress: a deploy that's already uploading to
@@ -223,7 +230,7 @@ jobs:
     # Same convention as deploy-sylox-app: only a real push to main,
     # only once every existing check has passed.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test]
     # Its own concurrency group, separate from deploy-sylox-app: the
     # two services are independent, so one deploying should never
     # queue behind the other.

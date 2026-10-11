@@ -361,6 +361,27 @@ clearly, and the combined script exits 1 so Railway shows it as a
 crashed run (worth investigating, but never at the cost of a posting
 pass that already succeeded).
 
+**Known-fixed: the `NextEventId` read on a brand new EventRegistry.**
+Found during the testnet redeploy that shipped issues #12 and #21: on
+an EventRegistry that has never had `propose_tier1` called at all
+(`storage::next_event_id` is written only there, never by
+`register_definition`), the script's own `jq` read for `NextEventId`
+came back empty and the whole run died. Root cause was a `jq`
+precedence bug - `|` binds more loosely than `//`, so
+`storage[] | select(...) | .val.u64 // "0"` applied the fallback
+PER ELEMENT inside the pipe, never once over the whole expression;
+`select()` over zero matches produces no output at all (not a `null`
+value), so `// "0"` never ran. Fixed by parenthesizing the whole
+select pipeline before the fallback:
+`(storage[] | select(...) | .val.u64) // "0"`. Every previous deploy
+this was tested against already had a real event posted by the time
+`extend-ttl.sh` first ran, so this path was never exercised before.
+`deploy/test-extend-ttl-jq.sh` is a small, CI-run regression test for
+this exact expression (key missing, key present with a real value, key
+present storing a literal `0`) - audited every other `jq` lookup in
+`extend-ttl.sh` for the same `select(...) // default` shape at the
+same time; this was the only one.
+
 ## Upgrading a contract (issue #12)
 
 Every core contract (`RiskOracle`, `EventRegistry`, `Treasury`,

@@ -244,8 +244,25 @@ er_instance_response="$(curl -sSf -X POST "$RPC_URL" -H "Content-Type: applicati
   || die "getLedgerEntries(EventRegistry instance) failed"
 er_entry_xdr="$(echo "$er_instance_response" | jq -r '.result.entries[0].xdr // empty')"
 [[ -n "$er_entry_xdr" ]] || die "EventRegistry's own instance entry was not found; cannot read NextEventId"
+# Review finding (this session): `| binds more loosely than //`, so
+# `storage[] | select(...) | .val.u64 // "0"` applies the fallback
+# PER ELEMENT, inside the pipe, never once over the whole expression.
+# `select()` over zero matching elements produces no output at all
+# (not a null value), so `// "0"` - which only replaces an actual null
+# - never runs; the whole jq invocation then produces no output, and
+# next_event_id ends up empty. This only ever showed up on a brand new
+# EventRegistry that has never had propose_tier1 called (NextEventId
+# is written only by storage::next_event_id, called only from
+# propose_tier1, never from register_definition) - every previously
+# tested deploy already had a real event posted, so NextEventId always
+# existed and this path was never exercised. Parenthesizing forces the
+# whole select pipeline to evaluate to a single value (null when
+# nothing matched) before // applies: `(storage[] | select(...) |
+# .val.u64) // "0"` - verified against jq 1.7 for all three cases
+# (key missing -> "0"; key present with a real value -> that value;
+# key present storing a literal 0 -> "0", not mistaken for missing).
 next_event_id="$(echo "$er_entry_xdr" | "$STELLAR_BIN" xdr decode --type LedgerEntryData --output json \
-  | jq -r '.contract_data.val.contract_instance.storage[] | select(.key.vec[0].symbol == "NextEventId") | .val.u64 // "0"')"
+  | jq -r '(.contract_data.val.contract_instance.storage[] | select(.key.vec[0].symbol == "NextEventId") | .val.u64) // "0"')"
 [[ "$next_event_id" =~ ^[0-9]+$ ]] || die "could not read EventRegistry.NextEventId (got: $next_event_id)"
 log "EventRegistry NextEventId: $next_event_id (events 0..$(( next_event_id - 1 )) tracked, if any)"
 
