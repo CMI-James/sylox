@@ -782,12 +782,19 @@ impl Series {
                 storage::set_triggered_at(env, env.ledger().timestamp());
             }
             if resolved == SeriesState::Triggered || resolved == SeriesState::Expired {
+                // PR review (I26): called unconditionally, even when
+                // `total` is 0 - a series with no buyers ever still
+                // has to drop out of `MarketFactory`'s own live list
+                // and `Pins`/`LiveCoverCount` the moment it leaves
+                // Open/Closed/Pending, or it occupies a
+                // `MAX_SERIES_PER_ASSET` slot and a definition pin
+                // forever. `release_cover(series, 0)` is a correct,
+                // safe no-op on `open_cover` itself (`(open -
+                // 0).max(0) == open`) that still does this bookkeeping.
                 let config = Self::require_config(env);
                 let total = storage::get_total_reserved(env);
-                if total > 0 {
-                    MarketFactoryClient::new(env, &config.factory)
-                        .release_cover(&env.current_contract_address(), &total);
-                }
+                MarketFactoryClient::new(env, &config.factory)
+                    .release_cover(&env.current_contract_address(), &total);
             }
             events::StateChanged {
                 series: env.current_contract_address(),
@@ -923,5 +930,7 @@ fn ceil_div(numerator: i128, denominator: i128) -> i128 {
     (numerator + denominator - 1) / denominator
 }
 
+#[cfg(test)]
+mod budget_test;
 #[cfg(test)]
 mod test;

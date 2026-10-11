@@ -3,10 +3,13 @@
 //!
 //! Mocks for `RiskOracle`, `EventRegistry` and `MarketFactory`, for
 //! unit tests that don't need the real cross-contract behavior. The
-//! full day-88 integration scenario against the real contracts lands
-//! in a later commit, once this crate's own mechanics are proven.
+//! real day-88 scenario, against every real contract, lives in
+//! `test::integration` below.
 
 extern crate std;
+
+mod integration;
+mod property;
 
 use soroban_sdk::{
     contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Env, Map, Vec,

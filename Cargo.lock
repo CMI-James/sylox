@@ -1706,9 +1706,15 @@ dependencies = [
 name = "series"
 version = "0.1.0"
 dependencies = [
+ "event-registry",
+ "market-factory",
  "price-guard-mock",
+ "proptest",
+ "risk-oracle",
  "soroban-sdk",
+ "staking",
  "sylox-types",
+ "treasury",
 ]
 
 [[package]]
