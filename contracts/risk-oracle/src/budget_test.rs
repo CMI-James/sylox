@@ -59,16 +59,18 @@ fn signal_set(env: &Env, epoch: u64, peg_ratio: i128) -> SignalSet {
     }
 }
 
-/// Registers RiskOracle and a mock Staking, initializes RiskOracle
-/// against it, and adds one enabled asset.
+/// Registers RiskOracle (constructed atomically against a mock Staking)
+/// and adds one enabled asset.
 fn setup(env: &Env) -> (RiskOracleClient<'_>, Address) {
     env.mock_all_auths();
     let staking_id = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(env, &contract_id);
     let governor = Address::generate(env);
     let registry = Address::generate(env);
-    client.initialize(&governor, &registry, &staking_id);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking_id.clone()),
+    );
+    let client = RiskOracleClient::new(env, &contract_id);
 
     let asset = Address::generate(env);
     let issuer = Address::generate(env);
@@ -377,11 +379,13 @@ fn budget_reward_keeper_grouping_across_a_full_backfill_window_several_keepers_m
     let env = Env::default();
     env.mock_all_auths();
     let staking = env.register(MockStaking, ());
-    let contract_id = env.register(RiskOracle, ());
-    let client = RiskOracleClient::new(&env, &contract_id);
     let governor = Address::generate(&env);
     let registry = Address::generate(&env);
-    client.initialize(&governor, &registry, &staking);
+    let contract_id = env.register(
+        RiskOracle,
+        (governor.clone(), registry.clone(), staking.clone()),
+    );
+    let client = RiskOracleClient::new(&env, &contract_id);
     let asset = Address::generate(&env);
     let issuer = Address::generate(&env);
     client.add_asset(&asset_config(&env, &asset, &issuer));

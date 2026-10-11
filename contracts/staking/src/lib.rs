@@ -105,17 +105,20 @@ fn split_half(amount: i128) -> (i128, i128) {
 
 #[contractimpl]
 impl Staking {
-    pub fn initialize(
+    /// Issue #21: a constructor, not a separate `initialize` call -
+    /// see `RiskOracle::__constructor`'s own doc comment for why. Only
+    /// stores addresses and config; never calls another contract (the
+    /// other four may not exist yet when this runs, since every
+    /// address here is computed in advance from a deterministic salt,
+    /// deploy/deploy.sh's own "Constructor flow" section).
+    pub fn __constructor(
         env: Env,
         governor: Address,
         oracle: Address,
         registry: Address,
         treasury: Address,
         usdc: Address,
-    ) -> Result<(), Error> {
-        if env.storage().instance().has(&CONFIG_KEY) {
-            return Err(Error::AlreadyInitialized);
-        }
+    ) {
         env.storage().instance().set(
             &CONFIG_KEY,
             &Config {
@@ -126,7 +129,6 @@ impl Staking {
                 usdc,
             },
         );
-        Ok(())
     }
 
     /// Issue #12. The currently deployed code's own version, bumped by

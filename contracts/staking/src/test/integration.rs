@@ -88,19 +88,43 @@ fn setup(env: &Env) -> IntegrationFixture<'_> {
     let usdc_client = token::TokenClient::new(env, &usdc);
     let usdc_admin_client = token::StellarAssetClient::new(env, &usdc);
 
-    let staking_id = env.register(Staking, ());
-    let staking = StakingClient::new(env, &staking_id);
-
-    let oracle_id = env.register(RiskOracle, ());
-    let oracle = RiskOracleClient::new(env, &oracle_id);
+    // Staking's constructor needs RiskOracle's address and RiskOracle's
+    // needs Staking's, so neither contract can be `register`-ed (with
+    // its real constructor) before the other's address exists.
+    // Generating both addresses up front breaks the cycle - each
+    // `register_at` below runs with every address its own constructor
+    // needs already in hand.
+    let staking_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
 
     // Staking.oracle = the real RiskOracle's own address: this is
     // exactly the cross-contract wiring Section 12.3 describes, and
     // the whole point of this test (no mock standing in for either
     // side of the lock_bond/release_bond/aggregate/is_active_keeper
     // calls that cross this boundary).
-    staking.initialize(&governor_contract, &oracle_id, &registry, &treasury, &usdc);
-    oracle.initialize(&governor_contract, &registry, &staking_id);
+    env.register_at(
+        &staking_id,
+        Staking,
+        (
+            governor_contract.clone(),
+            oracle_id.clone(),
+            registry.clone(),
+            treasury.clone(),
+            usdc.clone(),
+        ),
+    );
+    let staking = StakingClient::new(env, &staking_id);
+
+    env.register_at(
+        &oracle_id,
+        RiskOracle,
+        (
+            governor_contract.clone(),
+            registry.clone(),
+            staking_id.clone(),
+        ),
+    );
+    let oracle = RiskOracleClient::new(env, &oracle_id);
 
     IntegrationFixture {
         staking,
@@ -313,24 +337,46 @@ fn setup_with_treasury(env: &Env) -> TreasuryIntegrationFixture<'_> {
     let usdc_client = token::TokenClient::new(env, &usdc);
     let usdc_admin_client = token::StellarAssetClient::new(env, &usdc);
 
-    let staking_id = env.register(Staking, ());
+    // A 3-way address cycle: Staking's constructor needs oracle_id and
+    // treasury_id, Treasury's needs staking_id, and RiskOracle's needs
+    // staking_id too. Generating all three addresses up front (same
+    // reasoning as `setup` above) breaks the cycle so each
+    // `register_at` runs with every address its own constructor needs
+    // already in hand, regardless of registration order.
+    let staking_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
+    let treasury_id = Address::generate(env);
+
+    env.register_at(
+        &staking_id,
+        Staking,
+        (
+            governor_contract.clone(),
+            oracle_id.clone(),
+            registry.clone(),
+            treasury_id.clone(),
+            usdc.clone(),
+        ),
+    );
     let staking = StakingClient::new(env, &staking_id);
 
-    let oracle_id = env.register(RiskOracle, ());
+    env.register_at(
+        &oracle_id,
+        RiskOracle,
+        (
+            governor_contract.clone(),
+            registry.clone(),
+            staking_id.clone(),
+        ),
+    );
     let oracle = RiskOracleClient::new(env, &oracle_id);
 
-    let treasury_id = env.register(Treasury, ());
-    let treasury = TreasuryClient::new(env, &treasury_id);
-
-    treasury.initialize(&governor_contract, &staking_id, &usdc);
-    staking.initialize(
-        &governor_contract,
-        &oracle_id,
-        &registry,
+    env.register_at(
         &treasury_id,
-        &usdc,
+        Treasury,
+        (governor_contract.clone(), staking_id.clone(), usdc.clone()),
     );
-    oracle.initialize(&governor_contract, &registry, &staking_id);
+    let treasury = TreasuryClient::new(env, &treasury_id);
 
     TreasuryIntegrationFixture {
         staking,

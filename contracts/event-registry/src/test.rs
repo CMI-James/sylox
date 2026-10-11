@@ -149,6 +149,7 @@ struct Fixture<'a> {
     governor_contract: Address,
     committee: Address,
     oracle: risk_oracle::RiskOracleClient<'a>,
+    #[allow(dead_code)]
     oracle_id: Address,
     staking: Address,
     staking_client: MockStakingClient<'a>,
@@ -168,17 +169,42 @@ fn setup(env: &Env) -> Fixture<'_> {
     let staking = env.register(MockStaking, ());
     let staking_client = MockStakingClient::new(env, &staking);
 
-    let registry_id = env.register(EventRegistry, ());
-
-    let oracle_id = env.register(risk_oracle::RiskOracle, ());
-    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
-    oracle.initialize(&governor_contract, &registry_id, &staking);
-
     let factory = Address::generate(env);
     let usdc = Address::generate(env);
 
+    // `EventRegistry`'s constructor needs `oracle_id` and
+    // `RiskOracle`'s needs `registry_id`, so neither can be
+    // registered (with its real constructor) before the other
+    // exists. `Address::generate` hands out both addresses up front -
+    // no on-chain equivalent is needed here, since these are just
+    // test addresses - breaking the cycle, matching `staking::test`'s
+    // own `setup` convention for the same problem.
+    let registry_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
+
+    env.register_at(
+        &oracle_id,
+        risk_oracle::RiskOracle,
+        (
+            governor_contract.clone(),
+            registry_id.clone(),
+            staking.clone(),
+        ),
+    );
+    let oracle = risk_oracle::RiskOracleClient::new(env, &oracle_id);
+
+    env.register_at(
+        &registry_id,
+        EventRegistry,
+        (
+            governor_contract.clone(),
+            oracle_id.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let client = EventRegistryClient::new(env, &registry_id);
-    client.initialize(&governor_contract, &oracle_id, &staking, &factory, &usdc);
 
     let keeper = Address::generate(env);
 
@@ -367,34 +393,6 @@ const SIGNAL_DISPUTE_SECS: u64 = 7_200;
 const WINDOW_SECS: u64 = 259_200;
 #[allow(dead_code)]
 const SIGNAL_DISPUTE_RULING_SECS: u64 = 518_400;
-
-// -- initialize --
-
-#[test]
-fn initialize_succeeds_once() {
-    let env = Env::default();
-    let fx = setup(&env);
-    let result = fx.client.try_initialize(
-        &fx.governor_contract,
-        &fx.oracle_id,
-        &fx.staking,
-        &fx.factory,
-        &fx.usdc,
-    );
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}
-
-#[test]
-fn every_function_requiring_config_rejects_before_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(EventRegistry, ());
-    let client = EventRegistryClient::new(&env, &contract_id);
-    let asset = Address::generate(&env);
-
-    let result = client.try_propose_tier1(&Address::generate(&env), &asset, &EventKind::Depeg, &1);
-    assert_eq!(result, Err(Ok(Error::NotInitialized)));
-}
 
 // -- register_definition --
 
@@ -2810,9 +2808,17 @@ fn upgrade_without_governor_auth_traps() {
     let staking = Address::generate(&env);
     let factory = Address::generate(&env);
     let usdc = Address::generate(&env);
-    let contract_id = env.register(EventRegistry, ());
+    let contract_id = env.register(
+        EventRegistry,
+        (
+            governor.clone(),
+            oracle.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let client = EventRegistryClient::new(&env, &contract_id);
-    client.initialize(&governor, &oracle, &staking, &factory, &usdc);
 
     let new_wasm_hash = env.upload(EventRegistry);
     // No mock_all_auths(): the governor never actually signs this call.
@@ -2875,10 +2881,117 @@ fn migrate_without_governor_auth_traps() {
     let staking = Address::generate(&env);
     let factory = Address::generate(&env);
     let usdc = Address::generate(&env);
-    let contract_id = env.register(EventRegistry, ());
+    let contract_id = env.register(
+        EventRegistry,
+        (
+            governor.clone(),
+            oracle.clone(),
+            staking.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let client = EventRegistryClient::new(&env, &contract_id);
-    client.initialize(&governor, &oracle, &staking, &factory, &usdc);
 
     // No mock_all_auths(): the governor never actually signs this call.
     client.migrate();
+}
+
+/// There is no longer a separate `initialize` call to invoke twice
+/// against one address - `register`'s own constructor runs exactly
+/// once, atomically, when the contract is deployed, and no Soroban
+/// deployment path can target an address that already has code at
+/// it. The closest thing to "initialize a second time" that still
+/// exists is `Env::register_at`, a testutils-only helper whose own
+/// doc comment says plainly that it is not reproducible on-chain:
+/// "Registering a contract that is already registered replaces it...
+/// the new contract's constructor will be called again during
+/// re-registration. That behavior only exists for this test utility
+/// and is not reproducible on-chain, where contract Wasm updates
+/// don't cause constructor to be called."
+///
+/// It is NOT a clean redeploy either, which is what makes it
+/// dangerous as a test shortcut and exactly why it has no on-chain
+/// equivalent: re-running the constructor only overwrites *instance*
+/// storage (`storage::Config`, written by `__constructor`), while
+/// *persistent* storage (every registered `EventDefinition`, written
+/// by `register_definition`) is untouched - confirmed against
+/// `soroban-env-host`'s own
+/// `register_test_contract_with_constructor` (`host/lifecycle.rs`),
+/// which calls `store_contract_instance` and then the constructor,
+/// with no step that clears persistent or temporary entries for the
+/// address. A real chain has no path that produces this mixed state:
+/// a freshly deployed address starts with nothing at all, and an
+/// existing address can never run a constructor a second time. This
+/// test proves both halves: the config really does change (the new
+/// governor's oracle is wired in, not the old one), and the old
+/// data really does survive (the definition registered under the
+/// first construction is still there).
+#[test]
+fn cannot_initialize_a_second_time() {
+    let env = Env::default();
+    let fx = setup(&env);
+
+    let asset = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    fx.oracle
+        .add_asset(&asset_config(&env, &asset, &issuer, IssuerFlags::default()));
+
+    let version = fx
+        .client
+        .register_definition(&depeg_definition(&env, &asset));
+    assert_eq!(version, 1);
+    assert_eq!(fx.client.current_version(&asset, &EventKind::Depeg), 1);
+
+    // A second, real RiskOracle that has never heard of `asset` -
+    // standing in for "a different deployment's own dependencies",
+    // the same role `fx.oracle_id` plays for the first construction.
+    let other_registry_stand_in = Address::generate(&env);
+    let other_staking_stand_in = Address::generate(&env);
+    let other_oracle_id = env.register(
+        risk_oracle::RiskOracle,
+        (
+            fx.governor_contract.clone(),
+            other_registry_stand_in,
+            other_staking_stand_in,
+        ),
+    );
+
+    // Re-run `__constructor` at the SAME address, via the testutils-
+    // only `register_at` (see doc comment above) - the only way this
+    // SDK can simulate a second construction at all - wiring in the
+    // new oracle instead of `fx.oracle_id`.
+    env.register_at(
+        &fx.contract_id,
+        EventRegistry,
+        (
+            fx.governor_contract.clone(),
+            other_oracle_id,
+            fx.staking.clone(),
+            fx.factory.clone(),
+            fx.usdc.clone(),
+        ),
+    );
+
+    // The config really changed: `register_definition` now consults
+    // the NEW oracle, which has no `asset_config` for `asset` at all,
+    // so even re-registering the exact same definition fails. If the
+    // re-run had been a no-op, or had somehow kept talking to the
+    // first oracle, this would still succeed.
+    let result = fx
+        .client
+        .try_register_definition(&depeg_definition(&env, &asset));
+    assert_eq!(result, Err(Ok(Error::InvalidDefinition)));
+
+    // The old data was NOT wiped: the definition registered under
+    // the first construction, before the re-run, still reads back
+    // exactly as it did before - proving this is a mutation of a
+    // live instance's config, not a fresh start.
+    assert_eq!(
+        fx.client.current_version(&asset, &EventKind::Depeg),
+        version,
+        "persistent storage must survive register_at re-running the \
+         constructor; only instance storage (the Config it writes) \
+         is touched"
+    );
 }

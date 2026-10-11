@@ -59,35 +59,74 @@ fn setup(env: &Env) -> Fixture<'_> {
     let committee = Address::generate(env);
     governor_client.set_committee(&committee);
 
-    let registry_id = env.register(EventRegistry, ());
-    let oracle_id = env.register(RiskOracle, ());
-    let staking_id = env.register(staking::Staking, ());
-    let treasury_id = env.register(Treasury, ());
-
     let sac_admin = Address::generate(env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
     let usdc = sac.address();
     let usdc_client = token::TokenClient::new(env, &usdc);
     let usdc_admin_client = token::StellarAssetClient::new(env, &usdc);
 
-    let treasury = TreasuryClient::new(env, &treasury_id);
-    treasury.initialize(&governor_contract, &staking_id, &usdc);
-
-    let staking = staking::StakingClient::new(env, &staking_id);
-    staking.initialize(
-        &governor_contract,
-        &oracle_id,
-        &registry_id,
-        &treasury_id,
-        &usdc,
-    );
-
-    let oracle = RiskOracleClient::new(env, &oracle_id);
-    oracle.initialize(&governor_contract, &registry_id, &staking_id);
-
     let factory = Address::generate(env);
+
+    // All four of EventRegistry, RiskOracle, Staking and Treasury's
+    // own constructors need at least one of the other three's
+    // addresses (EventRegistry needs oracle+staking, RiskOracle needs
+    // registry+staking, Staking needs oracle+registry+treasury,
+    // Treasury needs staking) - a real circular dependency with no
+    // natural "construct this one first" ordering, the same problem
+    // `deploy/deploy.sh`'s own "Constructor flow" section documents
+    // for the real deploy path. `Address::generate` hands out all
+    // four addresses up front - no on-chain equivalent is needed
+    // here, since these are just test addresses - so each
+    // `register_at` below runs with every address its own
+    // constructor needs already in hand.
+    let registry_id = Address::generate(env);
+    let oracle_id = Address::generate(env);
+    let staking_id = Address::generate(env);
+    let treasury_id = Address::generate(env);
+
+    env.register_at(
+        &treasury_id,
+        Treasury,
+        (governor_contract.clone(), staking_id.clone(), usdc.clone()),
+    );
+    let treasury = TreasuryClient::new(env, &treasury_id);
+
+    env.register_at(
+        &staking_id,
+        staking::Staking,
+        (
+            governor_contract.clone(),
+            oracle_id.clone(),
+            registry_id.clone(),
+            treasury_id.clone(),
+            usdc.clone(),
+        ),
+    );
+    let staking = staking::StakingClient::new(env, &staking_id);
+
+    env.register_at(
+        &oracle_id,
+        RiskOracle,
+        (
+            governor_contract.clone(),
+            registry_id.clone(),
+            staking_id.clone(),
+        ),
+    );
+    let oracle = RiskOracleClient::new(env, &oracle_id);
+
+    env.register_at(
+        &registry_id,
+        EventRegistry,
+        (
+            governor_contract.clone(),
+            oracle_id.clone(),
+            staking_id.clone(),
+            factory.clone(),
+            usdc.clone(),
+        ),
+    );
     let registry = EventRegistryClient::new(env, &registry_id);
-    registry.initialize(&governor_contract, &oracle_id, &staking_id, &factory, &usdc);
 
     Fixture {
         registry,

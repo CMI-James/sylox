@@ -72,15 +72,13 @@ const MIGRATED_TO_KEY: Symbol = soroban_sdk::symbol_short!("MIGRATE");
 
 #[contractimpl]
 impl Treasury {
-    pub fn initialize(
-        env: Env,
-        governor: Address,
-        staking: Address,
-        usdc: Address,
-    ) -> Result<(), Error> {
-        if env.storage().instance().has(&CONFIG_KEY) {
-            return Err(Error::AlreadyInitialized);
-        }
+    /// Issue #21: a constructor, not a separate `initialize` call -
+    /// see `RiskOracle::__constructor`'s own doc comment for why. Only
+    /// stores addresses and config; never calls another contract (the
+    /// other three may not exist yet when this runs, since every
+    /// address here is computed in advance from a deterministic salt,
+    /// deploy/deploy.sh's own "Constructor flow" section).
+    pub fn __constructor(env: Env, governor: Address, staking: Address, usdc: Address) {
         env.storage().instance().set(
             &CONFIG_KEY,
             &Config {
@@ -89,7 +87,6 @@ impl Treasury {
                 usdc,
             },
         );
-        Ok(())
     }
 
     /// Issue #12. The currently deployed code's own version, bumped by

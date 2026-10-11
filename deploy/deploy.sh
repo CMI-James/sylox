@@ -9,15 +9,19 @@
 # fresh deployments/testnet.json record every run.
 #
 # `deploy/deploy.sh mainnet` is not implemented: mainnet needs Governor
-# and MarketFactory deployed first (neither is merged yet), a real
-# collateral token (no TUSD stand-in), and atomic constructor-based
-# initialize (known-gap: initialize is unauthenticated on all four
-# contracts today). Wiring that up before those land would be building
-# on sand.
+# and MarketFactory deployed first (neither is merged yet) and a real
+# collateral token (no TUSD stand-in). The front-runnable `initialize`
+# gap this header used to name is fixed (issue #21): every contract now
+# takes its config through a constructor, which runs atomically with
+# deployment itself - see "Constructor flow" below - so there is no
+# longer a window where a deployed-but-unconfigured contract sits on
+# chain for anyone to race. Wiring up Governor/MarketFactory/real
+# collateral before those exist would still be building on sand; this
+# header is scoped to what's actually still missing, not to the old gap.
 #
 # Lead decisions, not reopened here:
 #   D1. `sylox-testnet-admin` stands in for Governor everywhere a
-#       contract's `initialize` expects a `governor` address.
+#       contract's constructor expects a `governor` address.
 #   D2. Testnet collateral is a self-issued asset, "TUSD", issued by
 #       `sylox-testnet-issuer`, deployed as a Soroban Asset Contract.
 #       Never called USDC anywhere, so nobody confuses it with real
@@ -48,9 +52,8 @@ fi
 
 if [[ "$NETWORK" == "mainnet" ]]; then
   echo "deploy/deploy.sh mainnet is not implemented yet: mainnet needs Governor" >&2
-  echo "and MarketFactory deployed first, plus atomic constructor-based" >&2
-  echo "initialize (see known-gap: initialize can be front-run on all four" >&2
-  echo "contracts today). See this script's own header comment." >&2
+  echo "and MarketFactory deployed first, and a real collateral token (no TUSD" >&2
+  echo "stand-in). See this script's own header comment." >&2
   exit 1
 fi
 
@@ -188,60 +191,105 @@ mint_tusd "$KEEPER_ADDR" "$KEEPER_BOND"
 mint_tusd "$ADMIN_ADDR" "$KEEPER_REWARD_FUNDING"
 log "minted $KEEPER_BOND TUSD to keeper, $KEEPER_REWARD_FUNDING TUSD to admin"
 
-# -- [5/7] Deploy the four contracts (not yet initialized) --------------
+# -- [5/7] Constructor flow (issue #21): precompute every address, --
+# -- deploy each contract fully configured in one atomic step --------
+#
+# A Soroban contract address is deterministic from (deployer, salt)
+# alone - confirmed against the real CLI (`stellar contract id wasm
+# --salt <salt> --source-account <deployer>` returns the same address
+# every time, for any wasm, before anything is deployed there at
+# all). This lets every one of the four contracts' own addresses be
+# known BEFORE any of them is deployed, which is what makes the
+# constructor flow possible at all: RiskOracle's own constructor
+# needs EventRegistry's and Staking's addresses, EventRegistry's
+# needs RiskOracle's and Staking's, and so on - a real circular
+# dependency with no natural "deploy this one first" ordering. Each
+# one's own constructor only STORES the other three's addresses; it
+# never calls them (contracts/*/src/lib.rs's own __constructor doc
+# comments), so it does not matter that the other three do not exist
+# on-chain yet at the moment any one of them is deployed.
+#
+# Fresh salts every run, never fixed ones: an address depends only on
+# (deployer, salt), so reusing the same four salts on a later redeploy
+# would collide with THIS run's own contracts, which still exist
+# on-chain at those same addresses. Derived from a per-deployment
+# nonce (sylox-v<N>-<contract>, N bumped by hand for each real
+# redeploy - see deployments/testnet.json's own "constructor_nonce"
+# field for the value the last real run used) hashed to a 32 byte
+# salt, since `stellar contract id wasm --salt` requires exactly that
+# shape, not an arbitrary string.
 
-log "[5/7] Deploying contracts"
+log "[5/7] Precomputing contract addresses (constructor flow, issue #21)"
 
-deploy_contract() {
-  local name="$1"
-  "$STELLAR_BIN" contract deploy --wasm "${WASM_FILE[$name]}" \
-    --source-account "$DEPLOYER" --network testnet 2>&1 | tail -1
+CONSTRUCTOR_NONCE="sylox-v1"
+salt_for() {
+  local contract="$1"
+  echo -n "${CONSTRUCTOR_NONCE}-${contract}" | shasum -a 256 | cut -d' ' -f1
 }
-RO_ID="$(deploy_contract risk_oracle)"
-ST_ID="$(deploy_contract staking)"
-TR_ID="$(deploy_contract treasury)"
-ER_ID="$(deploy_contract event_registry)"
+precompute_address() {
+  local contract="$1"
+  "$STELLAR_BIN" contract id wasm --salt "$(salt_for "$contract")" \
+    --source-account "$DEPLOYER" --network testnet
+}
+RO_ID="$(precompute_address risk_oracle)"
+ST_ID="$(precompute_address staking)"
+TR_ID="$(precompute_address treasury)"
+ER_ID="$(precompute_address event_registry)"
 for v in RO_ID ST_ID TR_ID ER_ID; do
-  [[ "${!v}" =~ ^C[A-Z0-9]{55}$ ]] || die "unexpected deploy output for $v: ${!v}"
+  [[ "${!v}" =~ ^C[A-Z0-9]{55}$ ]] || die "unexpected precomputed address for $v: ${!v}"
 done
-log "RiskOracle:    $RO_ID"
-log "Staking:       $ST_ID"
-log "Treasury:      $TR_ID"
-log "EventRegistry: $ER_ID"
+log "RiskOracle:    $RO_ID (precomputed)"
+log "Staking:       $ST_ID (precomputed)"
+log "Treasury:      $TR_ID (precomputed)"
+log "EventRegistry: $ER_ID (precomputed)"
 
-# -- [6/7] Initialize, wired together, abort loudly on front-run --------
+# Refuse to run if any of the four addresses already has a contract:
+# the nonce above was reused against a deployer that already deployed
+# under it (a real redeploy must bump CONSTRUCTOR_NONCE), or a nonce
+# collision landed on an address something else already occupies -
+# either way, continuing would deploy over, or silently coexist with,
+# something already there, never a fresh, fully-known set of four.
+address_is_occupied() {
+  "$STELLAR_BIN" contract info interface --id "$1" --network testnet >/dev/null 2>&1
+}
+for v in RO_ID ST_ID TR_ID ER_ID; do
+  if address_is_occupied "${!v}"; then
+    die "precomputed address for $v (${!v}) already has a contract deployed - bump CONSTRUCTOR_NONCE in this script and try again. Refusing to deploy a partial or colliding set."
+  fi
+done
+log "confirmed: none of the four precomputed addresses has a contract yet"
 
-log "[6/7] Initializing (front-run check: AlreadyInitialized aborts the run)"
+# -- [6/7] Deploy each contract, fully configured in one atomic call --
+
+log "[6/7] Deploying (constructor runs atomically with deployment - no front-runnable window)"
+
+deploy_with_constructor() {
+  local name="$1" expected_addr="$2"; shift 2
+  local deployed_addr
+  deployed_addr="$("$STELLAR_BIN" contract deploy --wasm "${WASM_FILE[$name]}" \
+    --salt "$(salt_for "$name")" --source-account "$DEPLOYER" --network testnet \
+    -- "$@" 2>&1 | tail -1)"
+  [[ "$deployed_addr" == "$expected_addr" ]] \
+    || die "$name deployed to $deployed_addr, not the precomputed $expected_addr - aborting. Do not continue with a partial set; the address scheme itself may be wrong, not just this one contract."
+  log "$name deployed and constructed at $deployed_addr (matches precomputed address)"
+}
+
+deploy_with_constructor risk_oracle "$RO_ID" \
+  --governor "$ADMIN_ADDR" --registry "$ER_ID" --staking "$ST_ID"
+
+deploy_with_constructor staking "$ST_ID" \
+  --governor "$ADMIN_ADDR" --oracle "$RO_ID" --registry "$ER_ID" --treasury "$TR_ID" --usdc "$TUSD_ID"
+
+deploy_with_constructor treasury "$TR_ID" \
+  --governor "$ADMIN_ADDR" --staking "$ST_ID" --usdc "$TUSD_ID"
+
+deploy_with_constructor event_registry "$ER_ID" \
+  --governor "$ADMIN_ADDR" --oracle "$RO_ID" --staking "$ST_ID" --factory "$ADMIN_ADDR" --usdc "$TUSD_ID"
 
 invoke() {
   local contract="$1" source="$2"; shift 2
   "$STELLAR_BIN" contract invoke --id "$contract" --source-account "$source" --network testnet -- "$@"
 }
-
-run_init() {
-  local label="$1"; shift
-  local out
-  if ! out="$("$@" 2>&1)"; then
-    if echo "$out" >&2 && echo "$out" | grep -qi "AlreadyInitialized\|Error(Contract, #1)"; then
-      die "$label: already initialized by someone else (front-run). Aborting the whole run; do not continue on a contract someone else initialized. Redeploy from scratch with fresh contract ids."
-    fi
-    die "$label: initialize failed:
-$out"
-  fi
-  log "$label initialized"
-}
-
-run_init "RiskOracle" invoke "$RO_ID" "$DEPLOYER" initialize \
-  --governor "$ADMIN_ADDR" --registry "$ER_ID" --staking "$ST_ID"
-
-run_init "Staking" invoke "$ST_ID" "$DEPLOYER" initialize \
-  --governor "$ADMIN_ADDR" --oracle "$RO_ID" --registry "$ER_ID" --treasury "$TR_ID" --usdc "$TUSD_ID"
-
-run_init "Treasury" invoke "$TR_ID" "$DEPLOYER" initialize \
-  --governor "$ADMIN_ADDR" --staking "$ST_ID" --usdc "$TUSD_ID"
-
-run_init "EventRegistry" invoke "$ER_ID" "$DEPLOYER" initialize \
-  --governor "$ADMIN_ADDR" --oracle "$RO_ID" --staking "$ST_ID" --factory "$ADMIN_ADDR" --usdc "$TUSD_ID"
 
 # -- [7/7] Protocol setup -------------------------------------------------
 
@@ -293,11 +341,12 @@ cat > "$RECORD" <<EOF
   "deployed_at": "$TIMESTAMP",
   "git_commit": "$GIT_COMMIT",
   "stellar_cli_version": "$got_version",
+  "constructor_nonce": "$CONSTRUCTOR_NONCE",
   "contracts": {
-    "risk_oracle": { "id": "$RO_ID", "wasm_hash": "${WASM_HASH[risk_oracle]}", "wasm_size": ${WASM_SIZE[risk_oracle]} },
-    "staking": { "id": "$ST_ID", "wasm_hash": "${WASM_HASH[staking]}", "wasm_size": ${WASM_SIZE[staking]} },
-    "treasury": { "id": "$TR_ID", "wasm_hash": "${WASM_HASH[treasury]}", "wasm_size": ${WASM_SIZE[treasury]} },
-    "event_registry": { "id": "$ER_ID", "wasm_hash": "${WASM_HASH[event_registry]}", "wasm_size": ${WASM_SIZE[event_registry]} }
+    "risk_oracle": { "id": "$RO_ID", "wasm_hash": "${WASM_HASH[risk_oracle]}", "wasm_size": ${WASM_SIZE[risk_oracle]}, "salt": "$(salt_for risk_oracle)" },
+    "staking": { "id": "$ST_ID", "wasm_hash": "${WASM_HASH[staking]}", "wasm_size": ${WASM_SIZE[staking]}, "salt": "$(salt_for staking)" },
+    "treasury": { "id": "$TR_ID", "wasm_hash": "${WASM_HASH[treasury]}", "wasm_size": ${WASM_SIZE[treasury]}, "salt": "$(salt_for treasury)" },
+    "event_registry": { "id": "$ER_ID", "wasm_hash": "${WASM_HASH[event_registry]}", "wasm_size": ${WASM_SIZE[event_registry]}, "salt": "$(salt_for event_registry)" }
   },
   "tusd": {
     "contract_id": "$TUSD_ID",

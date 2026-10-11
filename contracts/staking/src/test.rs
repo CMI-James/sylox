@@ -38,12 +38,7 @@ use crate::{params, Error, Staking, StakingClient};
 struct Fixture<'a> {
     client: StakingClient<'a>,
     contract_id: Address,
-    governor: Address,
-    oracle: Address,
-    registry: Address,
-    treasury: Address,
     treasury_client: treasury::TreasuryClient<'a>,
-    usdc: Address,
     usdc_admin_client: token::StellarAssetClient<'a>,
     usdc_client: token::TokenClient<'a>,
 }
@@ -76,24 +71,40 @@ fn setup(env: &Env) -> Fixture<'_> {
     let usdc_admin_client = token::StellarAssetClient::new(env, &usdc);
     let usdc_client = token::TokenClient::new(env, &usdc);
 
-    let contract_id = env.register(Staking, ());
-    let client = StakingClient::new(env, &contract_id);
+    // Staking's constructor needs `treasury_id` and `Treasury`'s needs
+    // `contract_id`, so neither can be registered (with its real
+    // `initialize`-replacing constructor) before the other exists.
+    // `Address::generate` hands out both addresses up front - no
+    // on-chain equivalent is needed here, since these are just test
+    // addresses - breaking the cycle so each `register_at` below runs
+    // with every address its own constructor needs already in hand.
+    let contract_id = Address::generate(env);
+    let treasury_id = Address::generate(env);
 
-    let treasury_id = env.register(treasury::Treasury, ());
+    env.register_at(
+        &treasury_id,
+        treasury::Treasury,
+        (governor.clone(), contract_id.clone(), usdc.clone()),
+    );
     let treasury_client = treasury::TreasuryClient::new(env, &treasury_id);
-    treasury_client.initialize(&governor, &contract_id, &usdc);
 
-    client.initialize(&governor, &oracle, &registry, &treasury_id, &usdc);
+    env.register_at(
+        &contract_id,
+        Staking,
+        (
+            governor.clone(),
+            oracle.clone(),
+            registry.clone(),
+            treasury_id.clone(),
+            usdc.clone(),
+        ),
+    );
+    let client = StakingClient::new(env, &contract_id);
 
     Fixture {
         client,
         contract_id,
-        governor,
-        oracle,
-        registry,
-        treasury: treasury_id,
         treasury_client,
-        usdc,
         usdc_admin_client,
         usdc_client,
     }
@@ -164,41 +175,96 @@ fn settlement_closes(epoch: u64) -> u64 {
     settlement_opens(epoch) + params::SETTLE_WINDOW_SECS
 }
 
-// -- initialize --
+// -- constructor --
 
+/// Issue #21: `initialize` is gone, replaced by `__constructor`, which
+/// Soroban runs atomically at deploy time - there is no longer a
+/// window where a contract address exists but is unconfigured, so
+/// there is nothing left for an `AlreadyInitialized`/`NotInitialized`
+/// pair of tests to prove on a freshly `register`-ed address (every
+/// `register` call makes a brand new address, and the constructor for
+/// that address has necessarily already run by the time the call
+/// returns).
+///
+/// The one honest thing left to demonstrate is `register_at`'s own
+/// testutils-only escape hatch: it re-runs a contract's constructor
+/// against an address that is already registered (soroban-sdk's own
+/// doc comment on `Env::register_at`: "Registering a contract that is
+/// already registered replaces it... the new contract's constructor
+/// will be called again during re-registration. That behavior only
+/// exists for this test utility and is not reproducible on-chain").
+/// This is not a way to "call the constructor twice" on a live
+/// contract - there is no deployed equivalent, since on-chain, an
+/// address's executable and constructor are fixed at creation and
+/// `update_current_contract_wasm` (what `upgrade()` uses) never
+/// re-invokes a constructor.
+///
+/// What re-registration actually does is narrower than a full reset:
+/// the second `__constructor` run overwrites `CONFIG_KEY` in instance
+/// storage exactly like the first did, but it is still the same
+/// address and the same instance storage, so anything the first
+/// constructor's *callers* wrote under a different key (here, a
+/// keeper `add_keeper` added after the first registration) is left
+/// alone. This test proves both halves at once: the config really is
+/// replaced (the new governor/oracle/registry/treasury/usdc values
+/// read back, not the old ones), while unrelated storage the
+/// constructor itself never touches survives the "second
+/// construction" untouched - a real contract's constructor has no
+/// such risk, precisely because it can never run a second time there.
 #[test]
-fn initialize_succeeds_once() {
+fn cannot_initialize_a_second_time() {
     let env = Env::default();
     let fx = setup(&env);
-    // setup() already called initialize(); a plain read proves the
-    // config stuck (is_active_keeper on an unregistered address reads
-    // false rather than panicking NotInitialized).
-    assert!(!fx.client.is_active_keeper(&Address::generate(&env)));
-}
 
-#[test]
-fn initialize_rejects_a_second_call() {
-    let env = Env::default();
-    let fx = setup(&env);
-    let result = fx.client.try_initialize(
-        &fx.governor,
-        &fx.oracle,
-        &fx.registry,
-        &fx.treasury,
-        &fx.usdc,
+    // Something the first constructor never wrote, added after the
+    // fact through an ordinary call - this is the "unrelated storage"
+    // half of the claim above.
+    let keeper = Address::generate(&env);
+    fx.client.add_keeper(&keeper);
+    assert!(fx.client.keeper(&keeper).is_some());
+
+    // register_at's "already registered" path (the only way to run a
+    // second `__constructor` against the same address at all) installs
+    // a wholly different config, naming a fresh governor/oracle/
+    // registry/treasury/usdc.
+    let new_governor = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+    let new_registry = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let new_usdc = Address::generate(&env);
+    env.register_at(
+        &fx.contract_id,
+        Staking,
+        (
+            new_governor.clone(),
+            new_oracle.clone(),
+            new_registry.clone(),
+            new_treasury.clone(),
+            new_usdc.clone(),
+        ),
     );
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}
 
-#[test]
-fn every_function_requiring_config_rejects_before_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Staking, ());
-    let client = StakingClient::new(&env, &contract_id);
-    let who = Address::generate(&env);
-    let result = client.try_stake(&who, &1);
-    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+    // The config half: reading CONFIG_KEY directly (Config/CONFIG_KEY
+    // are crate-private, so this test, as a child module of the
+    // crate's own root, can see them) proves the second constructor's
+    // values are what is actually stored now, not the first's.
+    let stored_config: crate::Config = env.as_contract(&fx.contract_id, || {
+        env.storage().instance().get(&crate::CONFIG_KEY).unwrap()
+    });
+    assert_eq!(stored_config.governor, new_governor);
+    assert_eq!(stored_config.oracle, new_oracle);
+    assert_eq!(stored_config.registry, new_registry);
+    assert_eq!(stored_config.treasury, new_treasury);
+    assert_eq!(stored_config.usdc, new_usdc);
+
+    // The unrelated-storage half: the keeper added before
+    // re-registration is still there, because re-running
+    // `__constructor` only overwrites the one key it ever writes
+    // (CONFIG_KEY), not the contract's entire instance storage.
+    assert!(
+        fx.client.keeper(&keeper).is_some(),
+        "re-registration must not disturb storage the constructor itself never touches"
+    );
 }
 
 // -- add_keeper / remove_keeper --
@@ -1744,9 +1810,17 @@ fn missing_oracle_auth_traps_natively_rather_than_returning_unknown_caller() {
     let treasury = Address::generate(&env);
     let sac_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
-    let contract_id = env.register(Staking, ());
+    let contract_id = env.register(
+        Staking,
+        (
+            governor.clone(),
+            oracle.clone(),
+            registry.clone(),
+            treasury.clone(),
+            sac.address(),
+        ),
+    );
     let client = StakingClient::new(&env, &contract_id);
-    client.initialize(&governor, &oracle, &registry, &treasury, &sac.address());
 
     let asset = Address::generate(&env);
     let who = Address::generate(&env);
@@ -1779,9 +1853,17 @@ fn upgrade_without_governor_auth_traps() {
     let treasury = Address::generate(&env);
     let sac_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
-    let contract_id = env.register(Staking, ());
+    let contract_id = env.register(
+        Staking,
+        (
+            governor.clone(),
+            oracle.clone(),
+            registry.clone(),
+            treasury.clone(),
+            sac.address(),
+        ),
+    );
     let client = StakingClient::new(&env, &contract_id);
-    client.initialize(&governor, &oracle, &registry, &treasury, &sac.address());
 
     let new_wasm_hash = env.upload(Staking);
     // No mock_all_auths(): the governor never actually signs this call.
@@ -1841,9 +1923,17 @@ fn migrate_without_governor_auth_traps() {
     let treasury = Address::generate(&env);
     let sac_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
-    let contract_id = env.register(Staking, ());
+    let contract_id = env.register(
+        Staking,
+        (
+            governor.clone(),
+            oracle.clone(),
+            registry.clone(),
+            treasury.clone(),
+            sac.address(),
+        ),
+    );
     let client = StakingClient::new(&env, &contract_id);
-    client.initialize(&governor, &oracle, &registry, &treasury, &sac.address());
 
     // No mock_all_auths(): the governor never actually signs this call.
     client.migrate();

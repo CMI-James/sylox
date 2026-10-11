@@ -107,7 +107,14 @@ proptest! {
         peg_ratio in 0i128..=(2 * SCALE),
     ) {
         let env = Env::default();
-        let contract_id = env.register(crate::RiskOracle, ());
+        let contract_id = env.register(
+            crate::RiskOracle,
+            (
+                Address::generate(&env),
+                Address::generate(&env),
+                Address::generate(&env),
+            ),
+        );
         let asset = Address::generate(&env);
         let keeper = Address::generate(&env);
 

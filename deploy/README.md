@@ -430,14 +430,28 @@ tested but its own body is empty until a future upgrade needs it.
 The contracts already deployed to testnet (`deployments/testnet.json`)
 do not have `upgrade()` at all - adding it, like any other function
 addition, requires one more redeploy under fresh addresses before
-`upgrade()` becomes available for every fix after this one. **Do not
-run this redeploy without an explicit go-ahead; nothing below is
-scheduled.**
+`upgrade()` becomes available for every fix after this one. Issue #21
+(constructor instead of `initialize`) ships in the same redeploy,
+since both need fresh contract addresses anyway - `deploy/deploy.sh`
+already uses the constructor flow described below. **Do not run this
+redeploy without an explicit go-ahead; nothing below is scheduled.**
 
 **Everything that needs re-running, in order, once approved:**
 
 1. `deploy/deploy.sh testnet` - fresh contract addresses, fresh
-   `deployments/testnet.json`.
+   `deployments/testnet.json`. Deploys through the constructor flow
+   (issue #21; see the "Constructor flow" comment block in
+   `deploy/deploy.sh` itself for the full mechanism): every contract's
+   address is precomputed from a deterministic salt BEFORE any of the
+   four is deployed, each is deployed with its constructor args
+   already known (including the other three's precomputed addresses),
+   and there is no longer a separate `initialize` call or a window
+   where a deployed contract sits unconfigured. `CONSTRUCTOR_NONCE` in
+   `deploy.sh` must be bumped from whatever the last real run used
+   (recorded in the previous `deployments/testnet.json`'s own
+   `constructor_nonce` field) - the script refuses to run if any
+   precomputed address already has a contract, which a reused nonce
+   against the same deployer always triggers.
 2. The 71 hour USDC backfill (`deploy/post-demo-signals.sh testnet
    71`), oldest first, same ordering constraint as the original
    deploy (`deploy/smoke-testnet.sh` AFTER the backfill, never before
@@ -495,8 +509,8 @@ contract's own storage.
   whenever the new 71 hour backfill (step 2) finishes, not from
   wherever the old deploy's own history had already gotten to.
 
-**Fold issue #21 (constructor instead of `initialize`) into this same
-redeploy if it is ready in time** - both need fresh contract addresses
-anyway, so doing them together avoids a second full redeploy and a
-second round of everything above. If #21 is not ready, this redeploy
-goes ahead without it; #21 does not hold up #12.
+**Issue #21 (constructor instead of `initialize`) ships in this same
+redeploy** - both need fresh contract addresses anyway, so doing them
+together avoids a second full redeploy and a second round of
+everything above. `deploy/deploy.sh` already deploys through the
+constructor flow; there is nothing left to fold in separately.

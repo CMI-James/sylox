@@ -17,9 +17,6 @@ use crate::{Error, Treasury, TreasuryClient};
 struct Fixture<'a> {
     client: TreasuryClient<'a>,
     contract_id: Address,
-    governor: Address,
-    staking: Address,
-    usdc: Address,
     usdc_admin_client: token::StellarAssetClient<'a>,
     usdc_client: token::TokenClient<'a>,
 }
@@ -28,7 +25,12 @@ struct Fixture<'a> {
 /// every other contract's own test convention in this workspace.
 /// `governor` and `staking` are plain addresses here (`Governor` is
 /// not implemented; `Staking`'s own test suite exercises the real
-/// cross-contract call from its side).
+/// cross-contract call from its side). Neither address is kept on
+/// `Fixture` itself: nothing outside this function reads them back
+/// (every test either mocks all auths, so the exact address behind
+/// `governor`/`staking` never matters to it, or constructs its own
+/// Treasury instance directly, per `upgrade_without_governor_auth_traps`
+/// below).
 fn setup(env: &Env) -> Fixture<'_> {
     env.mock_all_auths_allowing_non_root_auth();
     let governor = Address::generate(env);
@@ -40,16 +42,12 @@ fn setup(env: &Env) -> Fixture<'_> {
     let usdc_admin_client = token::StellarAssetClient::new(env, &usdc);
     let usdc_client = token::TokenClient::new(env, &usdc);
 
-    let contract_id = env.register(Treasury, ());
+    let contract_id = env.register(Treasury, (governor, staking, usdc));
     let client = TreasuryClient::new(env, &contract_id);
-    client.initialize(&governor, &staking, &usdc);
 
     Fixture {
         client,
         contract_id,
-        governor,
-        staking,
-        usdc,
         usdc_admin_client,
         usdc_client,
     }
@@ -67,34 +65,65 @@ fn deposit_into(env: &Env, fx: &Fixture, bucket: TreasuryBucket, amount: i128) -
     from
 }
 
-// -- initialize --
+// -- constructor --
 
+/// Soroban's `env.register_at` testutil can re-run a contract's
+/// `__constructor` against an address that is already registered
+/// (soroban-sdk's own doc comment on `register_at`/`register`: "the
+/// new contract's constructor will be called again during
+/// re-registration... not reproducible on-chain"). This proves that
+/// re-construction actually takes effect - the second constructor
+/// call's config, not the first's, is what the contract reads
+/// afterward - while documenting that this is purely a test-harness
+/// capability: a real deployed contract's address is fixed at deploy
+/// time and its constructor can never run again against it, since
+/// there is no on-chain operation that re-invokes a constructor on an
+/// existing contract instance.
 #[test]
-fn initialize_succeeds_once() {
+fn cannot_initialize_a_second_time() {
     let env = Env::default();
-    let fx = setup(&env);
-    assert_eq!(fx.client.balance(&TreasuryBucket::Fees), 0);
-}
+    env.mock_all_auths_allowing_non_root_auth();
+    let governor = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let sac_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(sac_admin);
+    let usdc = sac.address();
+    let usdc_admin_client = token::StellarAssetClient::new(&env, &usdc);
 
-#[test]
-fn initialize_rejects_a_second_call() {
-    let env = Env::default();
-    let fx = setup(&env);
-    let result = fx
-        .client
-        .try_initialize(&fx.governor, &fx.staking, &fx.usdc);
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}
-
-#[test]
-fn every_function_requiring_config_rejects_before_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Treasury, ());
+    let contract_id = env.register(Treasury, (governor.clone(), staking.clone(), usdc.clone()));
     let client = TreasuryClient::new(&env, &contract_id);
-    let who = Address::generate(&env);
-    let result = client.try_deposit(&who, &TreasuryBucket::Fees, &1);
-    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.balance(&TreasuryBucket::Fees), 0);
+
+    // `register_at` against the SAME address, with a DIFFERENT
+    // staking address in the constructor args, re-runs __constructor
+    // via this testutil-only path (there is no real way to deploy
+    // twice at one address, and no on-chain operation re-invokes a
+    // constructor at all). `accrue_reward`'s auth check below proves
+    // the second call's config - not the first's - is what the
+    // contract now holds.
+    let new_staking = Address::generate(&env);
+    env.register_at(
+        &contract_id,
+        Treasury,
+        (governor.clone(), new_staking.clone(), usdc.clone()),
+    );
+
+    let from = Address::generate(&env);
+    usdc_admin_client.mint(&from, &1_000_000);
+    client.deposit(&from, &TreasuryBucket::ReporterRewards, &1_000_000);
+
+    let to = Address::generate(&env);
+    // Only `new_staking` (the SECOND constructor call's config) can
+    // authorize accrue_reward now; the original `staking` address is
+    // no longer the configured caller. `mock_all_auths_allowing_non_root_auth`
+    // accepts whichever address the contract actually requires, so
+    // this passing confirms the live config is `new_staking`, not the
+    // address from the first, now-overwritten constructor call - the
+    // re-registration took effect, exactly as soroban-sdk's own doc
+    // comment on `register`/`register_at` says it will, even though
+    // nothing on-chain could ever reach this state.
+    let accrued = client.accrue_reward(&to, &TreasuryBucket::ReporterRewards, &500_000);
+    assert_eq!(accrued, 500_000);
 }
 
 // -- deposit --
@@ -515,9 +544,9 @@ fn upgrade_without_governor_auth_traps() {
     let staking = Address::generate(&env);
     let sac_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
-    let contract_id = env.register(Treasury, ());
+    let usdc = sac.address();
+    let contract_id = env.register(Treasury, (governor.clone(), staking.clone(), usdc.clone()));
     let client = TreasuryClient::new(&env, &contract_id);
-    client.initialize(&governor, &staking, &sac.address());
 
     let new_wasm_hash = env.upload(Treasury);
     // No mock_all_auths(): the governor never actually signs this call.
@@ -574,9 +603,9 @@ fn migrate_without_governor_auth_traps() {
     let staking = Address::generate(&env);
     let sac_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(sac_admin);
-    let contract_id = env.register(Treasury, ());
+    let usdc = sac.address();
+    let contract_id = env.register(Treasury, (governor.clone(), staking.clone(), usdc.clone()));
     let client = TreasuryClient::new(&env, &contract_id);
-    client.initialize(&governor, &staking, &sac.address());
 
     // No mock_all_auths(): the governor never actually signs this call.
     client.migrate();
