@@ -293,8 +293,8 @@ current-state storage, so every persistent/instance entry they write
 quietly ages toward expiry with nothing refreshing it. Measuring every
 tracked entry's `liveUntilLedgerSeq` (issue #28) showed the earliest
 expiring about 6 days out, too soon to wait for the real fix (extend
-TTL on write, per #28's own policy) to ship through Chigozirim's
-`upgrade()` work. **Remove this script and its call site in
+TTL on write, per #28's own policy) to ship through `upgrade()`
+(#12). **Remove this script and its call site in
 `deploy/post-demo-signals.sh` once `upgrade()` ships that fix** - this
 script's whole job disappears the moment the contracts extend their
 own TTL on write.
@@ -322,6 +322,20 @@ live call needs one is the 2h dispute window plus the 6 day ruling
 window (`SIGNAL_DISPUTE_RULING_SECS` = 518,400s) - about 22 hours of
 slack. This script does not widen that margin; only the real fix
 (extend on write, through `upgrade()`) can make it unnecessary.
+
+**Token balances: only a contract's own balance is tracked, never a
+classic account's.** A SAC's `Balance(Address)` key is a real Soroban
+`ContractData` entry, with its own TTL, only when the holder is itself
+a contract (Treasury's own TUSD balance, tracked here); for a plain
+classic account (the keeper, the DEMOUSD holder), the SAC's `balance()`
+reads the classic trustline balance straight off the classic ledger
+instead - confirmed empirically while reviewing this script (`getLedgerEntries`
+and even `stellar contract restore` both report no such entry for the
+keeper's own TUSD or the DEMOUSD holder, while Horizon's own account
+balance shows the real, current, non-zero amount: nothing archived,
+nothing lost, just never a Soroban entry in the first place). Tracking
+a classic holder's own balance here would always report "not found",
+forever, not a transient gap - so this script doesn't.
 
 **Manual extra keys**, off by default: `SYLOX_EXTRA_TTL_KEYS`, a
 space-separated list of `contract_id:key_json:durability` triples,

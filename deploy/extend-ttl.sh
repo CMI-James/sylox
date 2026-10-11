@@ -3,11 +3,11 @@
 # Staking ever call extend_ttl on their own current-state storage, so
 # every persistent/instance entry they write quietly ages toward
 # expiry with nothing refreshing it. The real fix (extend TTL on
-# write, per #28's policy) ships through Chigozirim's upgrade() work,
-# not a redeploy; this script buys time until that lands by extending
-# from outside, as a scheduled read-then-extend pass. Remove this
-# script and its call site in deploy/post-demo-signals.sh once
-# upgrade() ships the real fix.
+# write, per #28's policy) ships through upgrade() (#12), not a
+# redeploy; this script buys time until that lands by extending from
+# outside, as a scheduled read-then-extend pass. Remove this script
+# and its call site in deploy/post-demo-signals.sh once upgrade()
+# ships the real fix.
 #
 # Run by deploy/post-demo-signals.sh testnet --live, once per --live
 # pass (every 5 minutes), AFTER posting. One getLedgerEntries call
@@ -88,13 +88,37 @@ KEEPER_ADDR="$(jq -r '.identities.keeper' "$RECORD")"
 TUSD_ID="$(jq -r '.tusd.contract_id' "$RECORD")"
 USDC_ID="$(jq -r '.tracked_asset.contract_id' "$RECORD")"
 DEMO_ID="$(jq -r '.demo_asset.contract_id' "$DEMO_RECORD")"
-DEMO_HOLDER_ADDR="$(jq -r '.demo_asset.holder' "$DEMO_RECORD")"
 
 log() { echo "==> $*"; }
-die() { echo "FATAL: $*" >&2; exit 1; }
+
+# Converts a ledger sequence this far from `latest_ledger` into a UTC
+# date, ~5s/ledger (SECS_PER_LEDGER), same assumption issue #28's own
+# proposal uses.
+ledger_to_date() {
+  local live_until="$1"
+  local remaining_secs=$(( (live_until - latest_ledger) * SECS_PER_LEDGER ))
+  date -u -d "@$(( $(date +%s) + remaining_secs ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$(( $(date +%s) + remaining_secs ))" +%Y-%m-%dT%H:%M:%SZ
+}
+
+# PRE_EXTEND_EARLIEST_DATE is set right after the initial check (before
+# any extend attempt can fail) so die's own message always carries the
+# last KNOWN-GOOD earliest expiry, even if a later extend call fails -
+# post-demo-signals.sh's caller greps this out of the captured output
+# to decide whether a transient TTL failure is urgent enough to fail
+# the run (see deploy/post-demo-signals.sh's own comment at its call
+# site for the exact rule).
+PRE_EXTEND_EARLIEST_DATE=""
+die() {
+  echo "FATAL: $*" >&2
+  if [[ -n "$PRE_EXTEND_EARLIEST_DATE" ]]; then
+    echo "ttl: pre-check earliest $PRE_EXTEND_EARLIEST_DATE" >&2
+  fi
+  exit 1
+}
 
 for pair in "RO_ID:$RO_ID" "ER_ID:$ER_ID" "TR_ID:$TR_ID" "STK_ID:$STK_ID" "KEEPER_ADDR:$KEEPER_ADDR" \
-            "TUSD_ID:$TUSD_ID" "USDC_ID:$USDC_ID" "DEMO_ID:$DEMO_ID" "DEMO_HOLDER_ADDR:$DEMO_HOLDER_ADDR"; do
+            "TUSD_ID:$TUSD_ID" "USDC_ID:$USDC_ID" "DEMO_ID:$DEMO_ID"; do
   name="${pair%%:*}"
   value="${pair#*:}"
   [[ -n "$value" && "$value" != "null" ]] || die "could not read $name from $RECORD / $DEMO_RECORD"
@@ -241,16 +265,19 @@ track "$STK_ID" persistent "Staking Keeper($KEEPER_ADDR)" "$key_json"
 # by the Treasury instance entry tracked above. No separate persistent
 # key to track here.
 
-# -- Token balances: Treasury's TUSD balance, the DEMOUSD holder's
-# balance, the keeper's own balance of each. SAC Balance(Address) key,
-# confirmed against a real entry earlier this session.
+# -- Token balances: Treasury's own TUSD balance. A SAC's Balance(Address)
+# key is a real Soroban ContractData entry, with its own TTL, ONLY when
+# the holder is itself a contract (Treasury); for a plain classic
+# account (the keeper, the DEMOUSD holder), the SAC's balance() reads
+# the classic trustline balance directly off the classic ledger
+# instead - confirmed empirically (getLedgerEntries and even `stellar
+# contract restore` both report no such entry for the keeper's own
+# TUSD or the DEMOUSD holder, while Horizon's own account balance
+# shows the real, current, non-zero amount) - so there is no
+# Soroban-side TTL for those to extend at all. Tracking them here
+# would always report "not found", forever, not a transient gap.
 key_json="$(vec_json "$(sym_json "Balance")" "$(addr_json "$TR_ID")")"
 track "$TUSD_ID" persistent "TUSD Balance(Treasury)" "$key_json"
-key_json="$(vec_json "$(sym_json "Balance")" "$(addr_json "$DEMO_HOLDER_ADDR")")"
-track "$DEMO_ID" persistent "DEMOUSD Balance(holder)" "$key_json"
-key_json="$(vec_json "$(sym_json "Balance")" "$(addr_json "$KEEPER_ADDR")")"
-track "$TUSD_ID" persistent "TUSD Balance(keeper)" "$key_json"
-track "$USDC_ID" persistent "USDC Balance(keeper)" "$key_json"
 
 # -- Manual extra keys (off by default): "contract_id:key_json:durability" triples.
 if [[ -n "${SYLOX_EXTRA_TTL_KEYS:-}" ]]; then
@@ -325,6 +352,14 @@ done
 latest_ledger="$(curl -sSf -X POST "$RPC_URL" -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger","params":{}}' | jq -r '.result.sequence')"
 [[ "$latest_ledger" =~ ^[0-9]+$ ]] || die "could not read the latest ledger sequence"
+
+# Set once, right here, before any extend attempt can fail: the last
+# KNOWN-GOOD earliest expiry, for die's own message above to report if
+# anything below fails partway through.
+pre_extend_earliest_live_until="$(echo "${LIVE_UNTIL_BY_KEY[@]:-}" | tr ' ' '\n' | sort -n | head -1)"
+if [[ "$pre_extend_earliest_live_until" =~ ^[0-9]+$ ]]; then
+  PRE_EXTEND_EARLIEST_DATE="$(ledger_to_date "$pre_extend_earliest_live_until")"
+fi
 
 # -- Check + selectively extend. Skips a key with no entry at all
 # (not yet written, e.g. Score(USDC) or EventInProgress(asset) between
@@ -402,7 +437,7 @@ done
 # Re-read every tracked entry's TTL after any extension rather than
 # parse stellar contract extend's own stdout per call: simpler, and
 # correct regardless of how many entries were just extended.
-earliest_live_until="$(echo "${LIVE_UNTIL_BY_KEY[@]:-}" | tr ' ' '\n' | sort -n | head -1)"
+earliest_live_until="$pre_extend_earliest_live_until"
 if (( extended > 0 )); then
   keys_json="$(printf '%s\n' "${ALL_KEY_XDR[@]}" | jq -R . | jq -s .)"
   response="$(curl -sSf -X POST "$RPC_URL" -H "Content-Type: application/json" \
@@ -412,9 +447,6 @@ if (( extended > 0 )); then
 fi
 [[ "$earliest_live_until" =~ ^[0-9]+$ ]] || die "could not determine the earliest liveUntilLedgerSeq after extending"
 
-earliest_remaining_secs=$(( (earliest_live_until - latest_ledger) * SECS_PER_LEDGER ))
-earliest_date="$(date -u -d "@$(( $(date +%s) + earliest_remaining_secs ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-  || date -u -r "$(( $(date +%s) + earliest_remaining_secs ))" +%Y-%m-%dT%H:%M:%SZ)"
-
+earliest_date="$(ledger_to_date "$earliest_live_until")"
 names_joined="$(IFS=,; echo "${extended_names[*]:-}")"
 log "ttl: checked $checked, extended $extended [$names_joined], earliest now $earliest_date"

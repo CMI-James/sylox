@@ -353,7 +353,7 @@ run_live_mode() {
   cfg="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet --send=no -- sub_epoch_config --asset "$ASSET_ID" 2>&1)"
   if [[ "$cfg" == "null" || -z "$cfg" ]]; then
     echo "FATAL: sub_epoch_config(asset) is null; set_sub_epoch_secs must be called before --live can run" >&2
-    exit 1
+    return 1   # Not `exit`: the TTL stopgap (issue #28) must still run after this, win or lose.
   fi
   sub_epoch_secs_current="$(echo "$cfg" | jq -r '.sub_epoch_secs')"
   sub_epoch_secs_pending="$(echo "$cfg" | jq -r '.pending_sub_epoch_secs')"
@@ -413,7 +413,7 @@ run_live_mode() {
           ;;
         *)
           echo "FATAL: hour $hour sub $sub: $result" >&2
-          exit 1
+          return 1   # Not `exit`: the TTL stopgap (issue #28) must still run after this, win or lose.
           ;;
       esac
     done
@@ -453,16 +453,44 @@ if (( LIVE_MODE )); then
   # never masks a successful posting pass (POSTING_EXIT already
   # captured above), and a TTL failure never blocks or retries
   # posting, which already ran. The real fix (extend TTL on write, per
-  # #28's policy) ships through upgrade(); remove this call and
+  # #28's policy) ships through upgrade() (#12); remove this call and
   # deploy/extend-ttl.sh once that lands.
   log "Running the TTL stopgap (issue #28)"
   TTL_EXIT=0
-  "$REPO_ROOT/deploy/extend-ttl.sh" testnet || TTL_EXIT=$?
+  TTL_OUTPUT="$("$REPO_ROOT/deploy/extend-ttl.sh" testnet 2>&1)" || TTL_EXIT=$?
+  echo "$TTL_OUTPUT"
+
+  TTL_SHOULD_FAIL_RUN=0
   if (( TTL_EXIT != 0 )); then
-    log "TTL stopgap failed (exit $TTL_EXIT); posting's own result above still stands"
+    # A transient RPC error (the same classifier --live's own posting
+    # retry uses) with plenty of runway left is worth logging, not
+    # worth a crashed run on Railway: there's a tick every 5 minutes,
+    # and extend-ttl.sh's own die() always reports the last KNOWN-GOOD
+    # earliest expiry before it failed ("ttl: pre-check earliest ...")
+    # even when the failure happened partway through extending. Below
+    # 7 days of runway, or on any non-transient error (a real bug, a
+    # misconfigured key, anything is_transient_error does not
+    # recognize), this still exits 1 - that margin is too thin to
+    # quietly wait for the next tick.
+    TTL_PRE_CHECK_DATE="$(echo "$TTL_OUTPUT" | grep -oE 'ttl: pre-check earliest [0-9T:Z-]+' | awk '{print $NF}')"
+    TTL_PRE_CHECK_EPOCH=""
+    if [[ -n "$TTL_PRE_CHECK_DATE" ]]; then
+      TTL_PRE_CHECK_EPOCH="$(date -u -d "$TTL_PRE_CHECK_DATE" +%s 2>/dev/null \
+        || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$TTL_PRE_CHECK_DATE" +%s 2>/dev/null)"
+    fi
+    SEVEN_DAYS_FROM_NOW=$(( $(date +%s) + 7 * 24 * 3600 ))
+
+    if is_transient_error "$TTL_OUTPUT" \
+       && [[ "$TTL_PRE_CHECK_EPOCH" =~ ^[0-9]+$ ]] \
+       && (( TTL_PRE_CHECK_EPOCH > SEVEN_DAYS_FROM_NOW )); then
+      log "ttl: deferred (transient) - $TTL_PRE_CHECK_DATE is still more than 7 days out; not failing this run"
+    else
+      log "TTL stopgap failed (exit $TTL_EXIT); posting's own result above still stands"
+      TTL_SHOULD_FAIL_RUN=1
+    fi
   fi
 
-  if (( POSTING_EXIT != 0 || TTL_EXIT != 0 )); then
+  if (( POSTING_EXIT != 0 || TTL_SHOULD_FAIL_RUN != 0 )); then
     exit 1
   fi
   exit 0
