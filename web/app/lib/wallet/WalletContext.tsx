@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { WalletPickerModal, type WalletOption } from "@sylox/ui/components";
-import { getKit, ensureFreighterAccess, restoreWalletSilently } from "./kit";
+import { getKit, ensureFreighterAccess, restoreWalletSilently, FreighterAccountSwitchedError } from "./kit";
 
 export interface SignResult {
   signedTxXdr: string;
@@ -130,8 +130,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       // once back when the wallet was first connected, which is
       // exactly the gap that let signing fail with Freighter's raw
       // "not currently connected" error while the app still showed a
-      // connected wallet. A no-op for any other wallet.
-      await ensureFreighterAccess();
+      // connected wallet. Also catches the visitor switching accounts
+      // IN Freighter mid-visit (issue #59): on a mismatch, this
+      // throws FreighterAccountSwitchedError instead of signing - the
+      // app's own displayed address is updated to match, and the
+      // sign attempt stops here, never silently signing as a
+      // different account than what's on screen. A no-op for any
+      // other wallet.
+      try {
+        await ensureFreighterAccess(address);
+      } catch (e) {
+        if (e instanceof FreighterAccountSwitchedError) {
+          setAddress(e.newAddress);
+        }
+        throw e;
+      }
       const kit = await getKit();
       // Only the XDR string and the returned XDR string cross this
       // boundary - the kit's own SDK (17.x) never hands this app a

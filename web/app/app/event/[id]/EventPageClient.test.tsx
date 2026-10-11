@@ -212,19 +212,23 @@ describe("EventPageClient", () => {
 
   it("refetches the event after a successful write, so the badge updates without a manual reload", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({
-      getKit: async () => ({
-        refreshSupportedWallets: vi.fn(async () => [
-          { id: "freighter", name: "Freighter", icon: "", isAvailable: true, url: "" },
-        ]),
-        setWallet: vi.fn(),
-        fetchAddress: vi.fn(async () => ({ address: ADDRESS })),
-        disconnect: vi.fn(async () => {}),
-        signTransaction: vi.fn(async () => ({ signedTxXdr: "fake-xdr" })),
-      }),
-      ensureFreighterAccess: vi.fn(async () => {}),
-      restoreWalletSilently: vi.fn(async () => null),
-    }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return {
+        ...actual,
+        getKit: async () => ({
+          refreshSupportedWallets: vi.fn(async () => [
+            { id: "freighter", name: "Freighter", icon: "", isAvailable: true, url: "" },
+          ]),
+          setWallet: vi.fn(),
+          fetchAddress: vi.fn(async () => ({ address: ADDRESS })),
+          disconnect: vi.fn(async () => {}),
+          signTransaction: vi.fn(async () => ({ signedTxXdr: "fake-xdr" })),
+        }),
+        ensureFreighterAccess: vi.fn(async () => {}),
+        restoreWalletSilently: vi.fn(async () => null),
+      };
+    });
     vi.doMock("@/lib/event-actions", async () => {
       const actual = await vi.importActual<typeof import("@/lib/event-actions")>("@/lib/event-actions");
       return {

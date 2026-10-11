@@ -65,7 +65,10 @@ describe("WalletButton", () => {
 describe("WalletButton - connected", () => {
   it("shows the shortened address as a button with a visible dropdown affordance, and opens a menu with Copy address and Disconnect on click", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
 
@@ -99,7 +102,10 @@ describe("WalletButton - connected", () => {
 
   it("disconnects the wallet and returns to the 'Connect wallet' state when Disconnect is clicked", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(), restoreWalletSilently: async () => null };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
 
