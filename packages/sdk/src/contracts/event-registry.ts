@@ -15,23 +15,16 @@ export * from "./event-registry/src/index.js";
  * wallet's full `Signer` here, or the simulated/signed transaction's
  * source account won't match the wallet that's about to sign it.
  *
- * PR #69 review, required fix #2: takes the full `Signer` (publicKey +
- * signTransaction), not just a bare `publicKey` string, and wires
- * `signTransaction` into the Client's own construction options. See
- * events/restore.ts's doc comment for why this is required, not
- * optional - @stellar/stellar-sdk's AssembledTransaction.restoreFootprint
- * throws "no signTransaction function provided" unless signTransaction
- * was supplied at Client INITIALIZATION (confirmed directly against
- * this package's pinned stellar-sdk's own doc comment on
- * restoreFootprint: "A signTransaction function must be provided
- * during the Client initialization" - supplying it later, e.g. only at
- * signAndSend time, is documented as NOT sufficient for restore
- * specifically, even though it is sufficient for an ordinary sign).
- * Every prepare* call in actions.ts runs maybeRestore (events/restore.ts)
- * against the transaction this client builds - if restore is ever
- * actually needed, it must be able to sign and submit the restore
- * transaction right there, before the caller's own confirm* step ever
- * runs.
+ * Takes the full `Signer` (publicKey + signTransaction), not just a
+ * bare `publicKey` string, and wires `signTransaction` into the
+ * Client's own construction options, because
+ * AssembledTransaction.restoreFootprint (events/restore.ts) requires
+ * signTransaction to already be present at Client construction time,
+ * not merely by the time a later sign call provides one. Every
+ * prepare* call in actions.ts runs maybeRestore against the
+ * transaction this client builds - if a restore is ever actually
+ * needed, it must be able to sign and submit the restore transaction
+ * right there, before the caller's own confirm* step ever runs.
  */
 export function eventRegistryClient(network: SyloxNetwork, signer?: Signer) {
   return new Client({

@@ -23,15 +23,12 @@ import type { SyloxNetwork } from "../networks.js";
  * proposeTier1/challenge, which don't exist in the source file (new in
  * this PR, Section 19.6).
  *
- * PR #69 review, required fix #2: prepare* now takes the full `signer:
- * Signer`, not a bare `address: string` - see actions.ts's and
- * events/restore.ts's own doc comments for why (restoreFootprint needs
- * signTransaction at Client construction time, not just by confirm*'s
- * later signAndSend). `lastConstructedWith` below now records the
- * whole signer object eventRegistryClient was actually called with, so
- * tests can assert both that the right publicKey AND the right
- * signTransaction function reached the client construction call - the
- * exact thing that was missing before this fix.
+ * prepare* takes the full `signer: Signer`, not a bare `address:
+ * string` - see actions.ts's and events/restore.ts's own doc comments
+ * for why. `lastConstructedWith` below records the whole signer object
+ * eventRegistryClient was actually called with, so tests can assert
+ * both the right publicKey AND the right signTransaction function
+ * reached the client construction call.
  */
 
 const { eventRegistryClient, lastConstructedWith } = vi.hoisted(() => {
@@ -129,14 +126,10 @@ describe("event-actions - publicKey wiring", () => {
   });
 
   /**
-   * PR #69 review, required fix #2's actual regression test: before the
-   * fix, prepare* built eventRegistryClient from a bare address string,
-   * so the client it handed to maybeRestore never carried a
-   * signTransaction at all - restoreFootprint would throw "no
-   * signTransaction function provided" the first time a real restore
-   * was ever needed. Asserting the exact signer object (not just its
-   * publicKey) reaches eventRegistryClient proves signTransaction is
-   * now wired in at construction time, before maybeRestore ever runs.
+   * Asserts the exact signer object (not just its publicKey) reaches
+   * eventRegistryClient, proving signTransaction is wired in at
+   * construction time, before maybeRestore ever runs - see
+   * event-registry.ts's doc comment for why that timing matters.
    */
   it("prepareFinalize passes the signer's own signTransaction through to eventRegistryClient, not just its publicKey", async () => {
     const signer = fakeSigner(ADDRESS_A);
@@ -369,42 +362,38 @@ describe("challenge (new, Section 19.6)", () => {
 });
 
 /**
- * PR #69 review, required fix #2's end-to-end regression coverage:
- * restore.test.ts already unit-tests maybeRestore in isolation (given a
- * fake AssembledTransaction, it builds/signs/submits correctly), but
- * that alone doesn't prove prepare* actually HANDS maybeRestore a
- * transaction capable of signing - which is exactly the gap this fix
- * closes (see actions.ts's and restore.ts's own doc comments: before
- * this fix, eventRegistryClient was built from a bare address with no
- * signTransaction, so restoreFootprint would have thrown regardless of
- * how correct maybeRestore's own logic was). This test drives a real
- * prepareFinalize call, with eventRegistryClient mocked to return a
- * transaction whose first simulation reports a restore is needed - the
- * same shape maybeRestore's own tests use - and asserts the restore
- * actually runs (restoreFootprint called, tx re-simulated) using
- * nothing but the signer prepareFinalize itself was given, with no
- * separate signer threaded in some other way. This is still a unit
- * test, not a live-testnet reproduction (per the PR description's
- * deviation #3 and this package's own real-restore limitation - no
- * reproducible way to force a genuinely archived ledger entry against
- * a freshly-deployed contract) - but it proves the exact wiring that
- * was broken is fixed, at the only level this PR's scope can reach.
+ * restore.test.ts unit-tests maybeRestore in isolation (given a fake
+ * AssembledTransaction, it drives tx.simulate({ restore: true })
+ * correctly), but that alone doesn't prove prepare* actually HANDS
+ * maybeRestore a transaction capable of signing a restore. This test
+ * drives a real prepareFinalize call, with eventRegistryClient mocked
+ * to return a transaction whose first simulation reports a restore is
+ * needed, and asserts the restore actually runs through
+ * tx.simulate({ restore: true }) (the real SDK's own restore-and-
+ * rebuild entry point - see restore.ts's doc comment for why a bare
+ * restoreFootprint + simulate() pair is wrong) using nothing but the
+ * signer prepareFinalize itself was given, with no separate signer
+ * threaded in some other way. This is still a unit test, not a
+ * live-testnet reproduction (no reproducible way to force a genuinely
+ * archived ledger entry against a freshly-deployed contract) - but it
+ * proves the signer-wiring this package depends on for a real restore
+ * to ever succeed.
  */
-describe("prepareFinalize + a real restore-needed simulation (PR #69 review, required fix #2)", () => {
-  it("passes the signer through to the point where restoreFootprint can actually run, then re-simulates and succeeds", async () => {
+describe("prepareFinalize + a real restore-needed simulation", () => {
+  it("passes the signer through to where tx.simulate({ restore: true }) can actually run, then succeeds", async () => {
     const signer = fakeSigner(ADDRESS_A);
     const restorePreamble = { minResourceFee: "12345", transactionData: {} };
-    const restoreFootprint = vi.fn(async () => ({}));
     let simulation: unknown = {
       transactionData: {},
       result: {},
       restorePreamble,
     };
-    const simulate = vi.fn(async () => {
-      // After a successful restore, the real AssembledTransaction.simulate()
-      // re-simulates in place; here that now reports success, matching
-      // the "re-run the original call" contract maybeRestore relies on.
-      simulation = undefined;
+    const simulate = vi.fn(async ({ restore }: { restore?: boolean } = {}) => {
+      // Models AssembledTransaction.simulate's own real behavior on
+      // `{ restore: true }` (see restore.ts's doc comment): a
+      // successful restore clears the restore-needed simulation,
+      // leaving the caller's normal post-prepare success path to run.
+      if (restore) simulation = undefined;
     });
 
     vi.mocked(eventRegistryClient).mockReturnValue({
@@ -414,7 +403,6 @@ describe("prepareFinalize + a real restore-needed simulation (PR #69 review, req
         },
         result: { isErr: () => false, unwrapErr: () => ({ message: "" }) },
         built: { source: signer.publicKey },
-        restoreFootprint,
         simulate,
         signAndSend: vi.fn(async () => ({
           result: { isErr: () => false, unwrap: () => undefined },
@@ -427,8 +415,7 @@ describe("prepareFinalize + a real restore-needed simulation (PR #69 review, req
     const prepared = await prepareFinalize(NETWORK, BigInt(1), signer, { onRestoreNeeded });
 
     expect(onRestoreNeeded).toHaveBeenCalledWith({ minResourceFee: "12345" });
-    expect(restoreFootprint).toHaveBeenCalledWith(restorePreamble);
-    expect(simulate).toHaveBeenCalledOnce();
+    expect(simulate).toHaveBeenCalledExactlyOnceWith({ restore: true });
 
     const result = await confirmFinalize(prepared, signer);
     expect(result.txHash).toBe("restored-then-finalized");

@@ -40,14 +40,14 @@ describe("Networks.Testnet", () => {
 });
 
 /**
- * PR #69 review, required fix #1: "Add a test that importing the
- * package doesn't touch node:* modules, using a browser-like
- * environment." The whole point of generating src/networks.generated.ts
- * at build time is that importing @sylox/sdk touches no node:* built-in
- * at all - a hard requirement for running in a browser (the web app in
- * PR 2 has no filesystem, no `node:fs`/`node:path`/`node:url`) and after
- * this package is published (deployments/*.json lives outside the
- * package and is never part of the published tarball).
+ * Importing @sylox/sdk must touch no node:* built-in at all - a hard
+ * requirement for running in a browser (this package has no
+ * filesystem, no `node:fs`/`node:path`/`node:url`) and after this
+ * package is published (deployments/*.json lives outside the package
+ * and is never part of the published tarball). This is exactly what
+ * generating src/networks.generated.ts at build time buys: everything
+ * node:*-dependent happens in scripts/generate-networks.mjs, never in
+ * code this package ships.
  *
  * Two independent checks, both exercising every file @sylox/sdk's
  * public entry point (src/index.ts) actually imports, not just

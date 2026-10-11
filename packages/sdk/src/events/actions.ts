@@ -21,22 +21,14 @@ import { maybeRestore, type OnRestoreNeeded } from "./restore.js";
  * exist anywhere in the codebase yet, written here following the exact
  * same prepare/confirm pattern as finalize/checkpointCure.
  *
- * PR #69 review, required fix #2: every prepare* below now takes the
- * full `signer: Signer`, not a bare `address: string`. Previously,
- * `eventRegistryClient(network, address)` built a Client with no
- * `signTransaction` at all, so when `maybeRestore` (events/restore.ts)
- * ran against that prepared transaction and simulation genuinely
- * reported an archived entry needing restore, `tx.restoreFootprint(...)`
- * would throw "no signTransaction function provided during Client
- * initialization" - @stellar/stellar-sdk requires signTransaction at
- * CONSTRUCTION time specifically for restoreFootprint, not merely by
- * the time signAndSend runs later in confirm*. The whole point of
- * Section 19.7's "the SDK builds and submits a restore transaction
- * first" was defeated by that gap: restore could never actually
- * happen, only the type-level plumbing existed. Passing the real
- * signer into eventRegistryClient here means the built-and-simulated
- * transaction already carries a working signTransaction, so a genuine
- * restore mid-prepare can actually sign and submit.
+ * Every prepare* below takes the full `signer: Signer`, not a bare
+ * `address: string`, because `eventRegistryClient` needs a working
+ * `signTransaction` already wired in at Client construction time for
+ * `maybeRestore` (events/restore.ts) to be able to sign and submit a
+ * restore transaction if simulation ever reports one is genuinely
+ * needed - see event-registry.ts's own doc comment for why
+ * construction time specifically, not merely by the time confirm*
+ * calls signAndSend later.
  */
 
 export interface WriteResult<T> {

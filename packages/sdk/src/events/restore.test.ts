@@ -1,20 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
+import { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { maybeRestore } from "./restore.js";
 import { SyloxError } from "../errors.js";
 
 /**
  * Section 19.7 / "Archived entries": new logic with no 1:1 source
- * file - `maybeRestore` is new in this PR. Exercises the three real
- * branches: no restore needed (no-op), restore needed and consented
- * to (builds+submits+re-simulates), and restore needed but declined
- * or uncallbacked (throws a clear SyloxError, never silently
- * proceeding).
+ * file - `maybeRestore` is new in this PR. Exercises the real branches:
+ * no restore needed (no-op), restore needed and consented to (goes
+ * through `tx.simulate({ restore: true })`, never a bare
+ * `restoreFootprint` + `simulate()` pair - see restore.ts's own doc
+ * comment for why that pair is unsafe), a failed restore (surfaced as
+ * a SyloxError, never the SDK's raw RestorationFailure), and restore
+ * needed but declined or uncallbacked (throws a clear SyloxError,
+ * never silently proceeding).
  */
 
-function fakeTx(opts: { simulation: unknown; restoreFootprint?: ReturnType<typeof vi.fn>; simulate?: ReturnType<typeof vi.fn> }) {
+function fakeTx(opts: { simulation: unknown; simulate?: ReturnType<typeof vi.fn> }) {
   return {
     simulation: opts.simulation,
-    restoreFootprint: opts.restoreFootprint ?? vi.fn(),
     simulate: opts.simulate ?? vi.fn(),
   } as never;
 }
@@ -64,13 +67,11 @@ describe("maybeRestore", () => {
     await expect(maybeRestore(tx, () => false)).rejects.toThrow(/declined/i);
   });
 
-  it("builds, submits, and re-simulates when onRestoreNeeded consents", async () => {
-    const restoreFootprint = vi.fn(async () => ({}));
-    const simulate = vi.fn(async () => {});
+  it("restores via tx.simulate({ restore: true }), never a bare restoreFootprint + simulate() pair", async () => {
     const restorePreamble = { minResourceFee: "1000", transactionData: {} };
+    const simulate = vi.fn(async () => {});
     const tx = fakeTx({
       simulation: { transactionData: {}, result: {}, restorePreamble },
-      restoreFootprint,
       simulate,
     });
 
@@ -82,12 +83,15 @@ describe("maybeRestore", () => {
     await maybeRestore(tx, onRestoreNeeded);
 
     expect(onRestoreNeeded).toHaveBeenCalledOnce();
-    expect(restoreFootprint).toHaveBeenCalledWith(restorePreamble);
-    expect(simulate).toHaveBeenCalledOnce();
+    // The one and only call into the real SDK's own restore-and-rebuild
+    // logic - maybeRestore itself never touches restoreFootprint, a
+    // sequence number, or a rebuild directly; all of that lives inside
+    // AssembledTransaction.simulate's own implementation (see
+    // restore.ts's doc comment), reached only through this one call.
+    expect(simulate).toHaveBeenCalledExactlyOnceWith({ restore: true });
   });
 
   it("supports a synchronous (non-Promise) onRestoreNeeded callback", async () => {
-    const restoreFootprint = vi.fn(async () => ({}));
     const simulate = vi.fn(async () => {});
     const tx = fakeTx({
       simulation: {
@@ -95,11 +99,67 @@ describe("maybeRestore", () => {
         result: {},
         restorePreamble: { minResourceFee: "500", transactionData: {} },
       },
-      restoreFootprint,
       simulate,
     });
 
     await maybeRestore(tx, () => true);
-    expect(restoreFootprint).toHaveBeenCalledOnce();
+    expect(simulate).toHaveBeenCalledExactlyOnceWith({ restore: true });
+  });
+
+  it("ends up with a transaction rebuilt against a fresh sequence number after a successful restore", async () => {
+    // Models AssembledTransaction.simulate's own real internal
+    // behavior (confirmed by reading node_modules directly, see
+    // restore.ts's doc comment): on `{ restore: true }`, a successful
+    // restore fetches a FRESH account and rebuilds `this.built` from
+    // it before re-simulating - never reusing the sequence number the
+    // transaction was originally built with. This fake's `simulate`
+    // mutates `tx.built` the same way, so the test can assert the
+    // caller sees a DIFFERENT built transaction (a new sequence
+    // number), not the stale one from before the restore.
+    const stale = { sequence: "100" };
+    const rebuilt = { sequence: "101" }; // The account's next sequence number, consumed by the restore transaction itself.
+    const restorePreamble = { minResourceFee: "1000", transactionData: {} };
+    const tx = {
+      simulation: { transactionData: {}, result: {}, restorePreamble },
+      built: stale,
+      simulate: vi.fn(async ({ restore }: { restore: boolean }) => {
+        if (restore) {
+          (tx as { built: unknown }).built = rebuilt;
+        }
+      }),
+    } as unknown as { simulation: unknown; built: unknown; simulate: ReturnType<typeof vi.fn> };
+
+    await maybeRestore(tx as never, () => true);
+
+    expect(tx.built).toBe(rebuilt);
+    expect(tx.built).not.toBe(stale);
+  });
+
+  it("wraps a failed restore in a SyloxError, never the SDK's raw RestorationFailure", async () => {
+    const restorePreamble = { minResourceFee: "1000", transactionData: {} };
+    const tx = fakeTx({
+      simulation: { transactionData: {}, result: {}, restorePreamble },
+      simulate: vi.fn(async () => {
+        throw new AssembledTransaction.Errors.RestorationFailure(
+          "Automatic restore failed! Result: {}",
+        );
+      }),
+    });
+
+    await expect(maybeRestore(tx, () => true)).rejects.toBeInstanceOf(SyloxError);
+    await expect(maybeRestore(tx, () => true)).rejects.toThrow(/restore failed/i);
+  });
+
+  it("propagates any other error from tx.simulate unchanged", async () => {
+    const restorePreamble = { minResourceFee: "1000", transactionData: {} };
+    const boom = new Error("network blip, unrelated to restore");
+    const tx = fakeTx({
+      simulation: { transactionData: {}, result: {}, restorePreamble },
+      simulate: vi.fn(async () => {
+        throw boom;
+      }),
+    });
+
+    await expect(maybeRestore(tx, () => true)).rejects.toBe(boom);
   });
 });

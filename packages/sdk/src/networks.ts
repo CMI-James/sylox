@@ -1,30 +1,22 @@
 import { GENERATED_TESTNET_NETWORK } from "./networks.generated.js";
 
 /**
- * PR #69 review, required fix #1: this file previously read
- * `deployments/testnet.json` via a static JSON import, AND read
- * `deployments/testnet-demo-asset.json` off disk at runtime via
- * node:fs/node:path/node:url. Both break in a browser (the web app in
- * PR 2 has no filesystem, no node:* modules) and both break once this
- * package is published (deployments/ lives outside packages/sdk, so
- * neither file is part of the published npm tarball).
- *
- * Fixed by moving both reads to BUILD TIME: scripts/generate-networks.mjs
- * reads both deployment files and writes src/networks.generated.ts,
- * plain TypeScript constants with zero node:* imports. That generated
- * file is committed (same convention as the generated contract
- * bindings under src/contracts/*\/src/), and CI's sdk-networks-drift
- * job (.github/workflows/ci.yml) fails the build if regenerating it
- * produces a diff - so this file can never silently drift from
- * deployments/testnet.json or deployments/testnet-demo-asset.json.
- * This module itself now only re-shapes already-generated plain data;
- * it does no I/O of its own, at import time or otherwise.
+ * `scripts/generate-networks.mjs` reads both deployment files
+ * (`deployments/testnet.json` and `deployments/testnet-demo-asset.json`)
+ * at BUILD TIME and writes `src/networks.generated.ts`, plain
+ * TypeScript constants with zero node:* imports - this module only
+ * re-shapes that already-generated plain data, so it does no I/O of
+ * its own, at import time or otherwise, and runs the same in Node and
+ * in a browser. The generated file is committed (same convention as
+ * the generated contract bindings under src/contracts/*\/src/), and
+ * CI's sdk-networks-drift job (.github/workflows/ci.yml) fails the
+ * build if regenerating it produces a diff, so it can never silently
+ * drift from either source deployment file. See this PR's README for
+ * how to regenerate after a contract redeploy.
  *
  * `demoAsset` is required, not optional: both source deployment files
- * are committed to the repo (testnet-demo-asset.json since PR #60, per
- * the engineer's review - the earlier "it's gitignored, may not exist"
- * premise in this PR's description was incorrect), so there is no
- * "absent at build time" case left to model as an optional field.
+ * are committed to the repo, so there is no "absent at build time"
+ * case to model as an optional field.
  */
 export interface TestnetDeployment {
   network: string;
@@ -76,13 +68,11 @@ export interface SyloxNetwork {
  * Built from src/networks.generated.ts's plain constants - never read
  * from disk at runtime, never imports node:fs/node:path/node:url. See
  * this file's own top-of-file doc comment for the generation step that
- * produces networks.generated.ts, and this PR's README for how to
- * regenerate it after a contract redeploy.
+ * produces networks.generated.ts.
  *
  * Only `risk_oracle` and `event_registry` are exposed here:
  * `staking`/`treasury`/market-factory have no generated TS bindings yet
- * (see this PR's description's deviations section) and are out of this
- * PR's scope.
+ * and are out of scope for this package so far.
  */
 export const Networks = {
   Testnet: {
