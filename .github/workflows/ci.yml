@@ -156,6 +156,49 @@ jobs:
       - name: Build web/app
         run: npm run build -w web/app
 
+  sdk:
+    name: packages/sdk (typecheck, test, build, networks drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck packages/sdk
+        run: npx tsc --noEmit
+        working-directory: packages/sdk
+      # Unit tests - pretest's own generate:networks npm lifecycle hook
+      # regenerates src/networks.generated.ts from the committed
+      # deployments/testnet.json + testnet-demo-asset.json before vitest
+      # runs, same as a local `npm test`.
+      - name: Unit tests, packages/sdk
+        run: npm test
+        working-directory: packages/sdk
+      - name: Build packages/sdk
+        run: npm run build -w packages/sdk
+      # PR #69 review, required fix #1: src/networks.generated.ts is a
+      # COMMITTED generated file (scripts/generate-networks.mjs's own
+      # doc comment and this package's README's "Regenerating after a
+      # redeploy" section) - it must never silently drift from
+      # deployments/testnet.json / deployments/testnet-demo-asset.json.
+      # The build step above already regenerated it once (prebuild);
+      # re-running the generator here and diffing is the actual drift
+      # check - a clean build only proves the file compiles, not that
+      # it still matches what's committed. Fails loudly, with the diff
+      # printed, if whoever last touched either source JSON file forgot
+      # to regenerate and commit this file.
+      - name: Check src/networks.generated.ts matches the committed deployment files
+        working-directory: packages/sdk
+        run: |
+          npm run generate:networks
+          if ! git diff --exit-code -- src/networks.generated.ts; then
+            echo "::error::packages/sdk/src/networks.generated.ts is out of sync with deployments/testnet.json and/or deployments/testnet-demo-asset.json."
+            echo "::error::Run 'npm run generate:networks -w packages/sdk' locally and commit the result."
+            exit 1
+          fi
+
   deploy-sylox-app:
     name: deploy sylox-app to Railway
     runs-on: ubuntu-latest
@@ -164,7 +207,7 @@ jobs:
     # passed - a broken contract build or a failing Rust test on main
     # blocks this exactly like it blocks everything else.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk]
     # One deploy at a time, in order - a second push landing while the
     # first is still deploying queues behind it instead of racing it
     # (never cancel-in-progress: a deploy that's already uploading to
@@ -230,7 +273,7 @@ jobs:
     # Same convention as deploy-sylox-app: only a real push to main,
     # only once every existing check has passed.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk]
     # Its own concurrency group, separate from deploy-sylox-app: the
     # two services are independent, so one deploying should never
     # queue behind the other.

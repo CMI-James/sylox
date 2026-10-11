@@ -4,6 +4,7 @@
   "workspaces": [
     "web/app",
     "web/landing",
-    "web/shared/ui"
+    "web/shared/ui",
+    "packages/sdk"
   ]
 }
