@@ -3,8 +3,9 @@
 //! by the governor, which calls env.deployer().update_current_contract_wasm
 //! (hash)." This module is that one implementation, called from each
 //! contract's own 2-3 line upgrade()/migrate() wrapper (each contract's own
-//! Config and Error are distinct types, so the auth check and the
-//! AlreadyMigrated mapping stay in the caller; everything else lives here).
+//! Config and Error are distinct types, so the AlreadyMigrated mapping
+//! stays in the caller; the auth check itself lives here - see do_upgrade/
+//! do_migrate below - so a future wrapper can't forget it).
 //!
 //! update_current_contract_wasm itself is deprecated since soroban-sdk v28
 //! in favor of update_current_contract(ContractExecutable::Wasm(hash)),
@@ -43,17 +44,19 @@ pub struct Upgraded {
     pub new_wasm_hash: BytesN<32>,
 }
 
-/// Call from each contract's own `upgrade(env, new_wasm_hash)`, after the
-/// caller's own `config.governor.require_auth()` (this function does not
-/// check auth itself - the caller already extracted `governor` from its
-/// own `Config` type, which this module cannot name generically).
+/// Call from each contract's own `upgrade(env, new_wasm_hash)`. Checks
+/// `governor.require_auth()` itself - the caller just extracts `governor`
+/// from its own `Config` type (which this module cannot name generically)
+/// and passes it straight through, so a wrapper can never forget the
+/// check.
 ///
 /// `current_version` is the calling contract's own `version()` constant,
 /// read BEFORE the swap (the whole reason `Upgraded` can carry a true
 /// `old_version` with no on-chain read-back: it is read from the code
 /// that is about to stop running, by that same code, not guessed by the
 /// caller).
-pub fn do_upgrade(env: &Env, current_version: u32, new_wasm_hash: BytesN<32>) {
+pub fn do_upgrade(env: &Env, governor: &Address, current_version: u32, new_wasm_hash: BytesN<32>) {
+    governor.require_auth();
     env.deployer()
         .update_current_contract(ContractExecutable::Wasm(new_wasm_hash.clone()));
     Upgraded {
@@ -64,24 +67,31 @@ pub fn do_upgrade(env: &Env, current_version: u32, new_wasm_hash: BytesN<32>) {
     .publish(env);
 }
 
-/// Call from each contract's own `migrate(env, target_version) -> Result<(),
-/// Error>`, after the caller's own `config.governor.require_auth()` (same
-/// reasoning as `do_upgrade`: no auth check here, the caller already did
-/// it). `key` is the instance storage key the CALLER's own DataKey enum
-/// reserves for "the storage version this contract's data is currently
-/// shaped for" - a plain Symbol, not a shared DataKey variant, since
-/// every contract's own DataKey is a distinct type this module cannot
-/// name.
+/// Call from each contract's own `migrate(env) -> Result<(), Error>`.
+/// Checks `governor.require_auth()` itself, same reasoning as
+/// `do_upgrade`. Always migrates to the CALLING CODE'S OWN
+/// `CONTRACT_VERSION` (`target_version` here, passed by the caller as its
+/// own constant) - never a caller-chosen version number: letting a
+/// governor mark an arbitrary future version as already migrated (e.g.
+/// passing 5 while the deployed code is still at 2) would permanently
+/// block that migration from ever running once the code genuinely
+/// reaches version 5. `key` is the instance storage key the CALLER's own
+/// DataKey enum reserves for "the storage version this contract's data is
+/// currently shaped for" - a plain Symbol, not a shared DataKey variant,
+/// since every contract's own DataKey is a distinct type this module
+/// cannot name.
 ///
 /// Returns `true` if `target_version` had not yet been applied (and
 /// applies it now - the caller's own migration body, if any, runs around
 /// this call); `false` if it was already applied (the caller maps this to
 /// its own `Error::AlreadyMigrated`-shaped variant). Comparing against the
-/// STORED version, not merely "has this key ever been set", so migrate()
-/// called again with a LATER target_version than the one on record still
-/// returns true and records the new one - each version can run at most
-/// once, not "migrate can run at most once ever".
-pub fn do_migrate(env: &Env, key: &Symbol, target_version: u32) -> bool {
+/// STORED version, not merely "has this key ever been set", so a LATER
+/// `CONTRACT_VERSION` after a future code upgrade still migrates
+/// correctly even though this same key already holds an earlier value -
+/// each version can run at most once, not "migrate can run at most once
+/// ever".
+pub fn do_migrate(env: &Env, governor: &Address, key: &Symbol, target_version: u32) -> bool {
+    governor.require_auth();
     let current: u32 = env.storage().instance().get(key).unwrap_or(0);
     if current >= target_version {
         return false;

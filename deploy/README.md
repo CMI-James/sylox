@@ -462,6 +462,15 @@ scheduled.**
    (`web/app/scripts/generate-bindings.mjs`) regenerated against the
    new contract IDs, committed, and `sylox-app` redeployed.
 
+**Before any of the above runs: record event 0's details in `docs/`**
+(event id, the `propose_tier1`/`finalize` transaction links, the
+revocation and clawback transaction links - everything needed to find
+the real history again on stellar.expert once the contract address
+that served it is no longer the live one) - so the real DEMOUSD
+IssuerFreeze event's history survives on paper even though the next
+section's "what is lost" below is still genuinely lost from the new
+contract's own storage.
+
 **What is lost, with no way to carry it forward:**
 
 - **`EventRegistry` event 0 and its finalize history** - the real

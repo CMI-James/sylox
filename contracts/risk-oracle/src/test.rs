@@ -3366,29 +3366,17 @@ fn upgrade_keeps_existing_storage() {
     );
 }
 
-/// `migrate()` can't run twice for the same target version:
-/// `AlreadyMigrated` on the second call, confirmed via `try_migrate`
-/// since this is a real returned error, not a native auth trap.
+/// `migrate()` always targets this code's own `CONTRACT_VERSION` (no
+/// caller-chosen argument - see `migrate`'s own doc comment for why),
+/// and can't run twice: `AlreadyMigrated` on the second call,
+/// confirmed via `try_migrate` since this is a real returned error,
+/// not a native auth trap.
 #[test]
-fn migrate_cannot_run_twice_for_the_same_version() {
+fn migrate_cannot_run_twice() {
     let env = Env::default();
     let fixture = setup(&env);
-    fixture.client.migrate(&1);
-    let result = fixture.client.try_migrate(&1);
-    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
-}
-
-/// A later `migrate()` call for a HIGHER target version still
-/// succeeds after an earlier one already ran: `do_migrate` compares
-/// against the stored version, not "has migrate ever been called at
-/// all" - each version runs at most once, not migrate() overall.
-#[test]
-fn migrate_to_a_later_version_succeeds_after_an_earlier_one() {
-    let env = Env::default();
-    let fixture = setup(&env);
-    fixture.client.migrate(&1);
-    fixture.client.migrate(&2);
-    let result = fixture.client.try_migrate(&2);
+    fixture.client.migrate();
+    let result = fixture.client.try_migrate();
     assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
 }
 
@@ -3406,5 +3394,5 @@ fn migrate_without_governor_auth_traps() {
     client.initialize(&governor, &registry, &staking);
 
     // No mock_all_auths(): the governor never actually signs this call.
-    client.migrate(&1);
+    client.migrate();
 }

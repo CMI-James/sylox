@@ -552,13 +552,15 @@ fn upgrade_keeps_existing_storage() {
     );
 }
 
-/// `migrate()` can't run twice for the same target version.
+/// `migrate()` always targets this code's own `CONTRACT_VERSION` (no
+/// caller-chosen argument - see `migrate`'s own doc comment for why),
+/// and can't run twice.
 #[test]
-fn migrate_cannot_run_twice_for_the_same_version() {
+fn migrate_cannot_run_twice() {
     let env = Env::default();
     let fx = setup(&env);
-    fx.client.migrate(&1);
-    let result = fx.client.try_migrate(&1);
+    fx.client.migrate();
+    let result = fx.client.try_migrate();
     assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
 }
 
@@ -577,5 +579,5 @@ fn migrate_without_governor_auth_traps() {
     client.initialize(&governor, &staking, &sac.address());
 
     // No mock_all_auths(): the governor never actually signs this call.
-    client.migrate(&1);
+    client.migrate();
 }

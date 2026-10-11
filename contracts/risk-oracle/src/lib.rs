@@ -200,21 +200,28 @@ impl RiskOracle {
     /// already uses.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
-        config.governor.require_auth();
-        sylox_types::upgrade::do_upgrade(&env, CONTRACT_VERSION, new_wasm_hash);
+        sylox_types::upgrade::do_upgrade(&env, &config.governor, CONTRACT_VERSION, new_wasm_hash);
         Ok(())
     }
 
     /// Issue #12. Storage migration hook for a future `upgrade()`: runs
-    /// at most once per `target_version`. Empty for now - no storage
+    /// at most once per `CONTRACT_VERSION`. Takes no argument - always
+    /// migrates to this code's OWN current version, never a
+    /// caller-chosen one (a governor could otherwise mark a future
+    /// version "already migrated" before the code ever reaches it,
+    /// permanently blocking that migration). Empty for now - no storage
     /// shape change ships with this PR - but every future upgrade that
     /// DOES change a stored type's shape migrates existing data here,
     /// gated the same way, with its own storage test (existing keys
     /// decode under the new types) alongside it.
-    pub fn migrate(env: Env, target_version: u32) -> Result<(), Error> {
+    pub fn migrate(env: Env) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
-        config.governor.require_auth();
-        if !sylox_types::upgrade::do_migrate(&env, &MIGRATED_TO_KEY, target_version) {
+        if !sylox_types::upgrade::do_migrate(
+            &env,
+            &config.governor,
+            &MIGRATED_TO_KEY,
+            CONTRACT_VERSION,
+        ) {
             return Err(Error::AlreadyMigrated);
         }
         Ok(())
