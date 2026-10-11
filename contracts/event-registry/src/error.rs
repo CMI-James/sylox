@@ -109,4 +109,8 @@ pub enum Error {
     /// most once; a second call for the same (or an earlier) version is
     /// a no-op request, not a retry of something that failed.
     AlreadyMigrated = 216,
+    /// markets design note Section 10, deviation 14: `set_factory`
+    /// called a second time. The real `MarketFactory` address is
+    /// written once, then permanently locked.
+    FactoryAlreadySet = 217,
 }
