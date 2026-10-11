@@ -1,0 +1,47 @@
+---
+title: Overview
+description: What Sylox is, and what this documentation covers.
+---
+
+## What Sylox is
+
+Sylox tracks risk on Stellar/Soroban issued assets and lets people buy
+and provide cover against specific failure events on those assets,
+such as a depeg, an issuer freeze, or a mint without backing.
+
+A risk oracle scores each tracked asset from live, keeper-reported
+signals: price data, liquidity depth, supply changes, and issuer
+actions like clawbacks or authorization revocations. An event registry
+turns a sustained bad signal into a proposed event, which can be
+challenged before it becomes final.
+
+## Testnet only
+
+Everything documented here runs on Stellar testnet. Contract
+addresses, sample assets, and signal data are all testnet values. Data
+shown by the app and referenced in these docs is sample data until the
+live data service ships, so never treat a number here as a real price
+or balance.
+
+Cover pays out only when an event defined in the registry is declared
+final, and only up to the amounts the contracts hold.
+
+## What's in these docs
+
+- **[Contract reference](/docs/contract-reference)**: generated from
+  the actual deployed testnet contracts, with addresses, functions,
+  types, and error codes.
+- **Concepts**: how risk scoring, events, and cover gating fit
+  together. Coming soon.
+- **Integration guides**: how to read contract state and submit
+  transactions from your own client. Coming soon.
+- **SDK reference**: using `@sylox/sdk` directly. Coming soon.
+- **Protection markets**: how cover is priced and settled. Coming
+  soon.
+- **Running a keeper or reporter**: how to post signals or report
+  events. Coming soon.
+
+## Where else to look
+
+- [Sylox app](https://app.sylox.xyz): the live testnet app.
+- [Sylox website](https://sylox.xyz): product overview.

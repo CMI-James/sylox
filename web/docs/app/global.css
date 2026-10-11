@@ -1,0 +1,104 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/preset.css";
+
+/* @sylox/ui lives outside this app's own directory tree (a workspace
+   package resolved through node_modules), which Tailwind v4's automatic
+   content detection doesn't traverse into by default. Without this, any
+   utility class that's only ever written inside a shared component
+   would be silently dropped from the generated CSS (see web/app's and
+   web/landing's own globals.css for the design-system PR that found
+   this). */
+@source "../../shared/ui/src";
+
+/* Sylox's own role-named tokens (imported in app/layout.tsx from
+   @sylox/ui/tokens.css), registered in Tailwind's @theme layer and
+   mapped onto Fumadocs UI's own --color-fd-* variables (its real
+   component CSS - sidebar, search dialog, TOC, callouts, code blocks -
+   reads these; see node_modules/fumadocs-ui/css/lib/base.css and
+   neutral.css for the defaults being replaced here, which live inside
+   an actual @theme block, not a plain :root override) so the whole
+   thing reads as the same product as web/app and web/landing, not a
+   themed-on-top stock Fumadocs site. Deliberately does NOT import any
+   of Fumadocs' own theme files (neutral.css etc., each of which pulls
+   in lib/default-colors.css) - every color they'd define is
+   overridden here anyway, so importing one first would just be dead
+   weight. Both [data-theme="dark"] (the document default - see
+   app/layout.tsx) and [data-theme="light"] resolve through the SAME
+   --color-fd-* mapping below, because the underlying
+   --surface/--text-primary/etc. tokens already flip per [data-theme]
+   in @sylox/ui/tokens.css - Fumadocs' own theme switcher just toggles
+   that attribute, same as the rest of the product. */
+@theme inline {
+  --color-slate-black: var(--color-slate-black);
+  --color-silo-oatmeal: var(--color-silo-oatmeal);
+  --color-anchor-graphite: var(--color-anchor-graphite);
+  --color-cement-grey: var(--color-cement-grey);
+  --color-cyber-tin: var(--color-cyber-tin);
+  --color-risk-crimson: var(--color-risk-crimson);
+  --color-risk-crimson-tint: var(--color-risk-crimson-tint);
+
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-focus-ring: var(--focus-ring);
+
+  --font-sans: var(--font-sans-family);
+  --font-mono: var(--font-mono-family);
+  --font-display: var(--font-display);
+
+  --color-fd-background: var(--surface);
+  --color-fd-foreground: var(--text-primary);
+  --color-fd-card: var(--surface-raised);
+  --color-fd-card-foreground: var(--text-primary);
+  --color-fd-popover: var(--surface-raised);
+  --color-fd-popover-foreground: var(--text-primary);
+  --color-fd-primary: var(--accent);
+  --color-fd-primary-foreground: var(--on-accent);
+  --color-fd-secondary: var(--surface-raised);
+  --color-fd-secondary-foreground: var(--text-primary);
+  --color-fd-muted: var(--surface-raised);
+  --color-fd-muted-foreground: var(--text-secondary);
+  --color-fd-accent: var(--surface-raised);
+  --color-fd-accent-foreground: var(--text-primary);
+  --color-fd-border: var(--border);
+  --color-fd-ring: var(--focus-ring);
+  /* Fumadocs' own component CSS (diff blocks, overlays) reaches for
+     these directly - without them, `next build` fails outright
+     ("Cannot apply unknown utility class `bg-fd-diff-remove`"), since
+     lib/default-colors.css (which would normally define them) is
+     never imported here. Mapped onto Sylox's own risk palette rather
+     than Fumadocs' defaults: diff-remove/add reuse the brand's
+     crimson/green risk-band colors (same colors a removed/added line
+     would read as "bad"/"good" everywhere else in the product), and
+     overlay is a plain translucent black, same role as Fumadocs'
+     own default. */
+  --color-fd-overlay: color-mix(in srgb, var(--surface) 20%, transparent);
+  --color-fd-diff-remove: color-mix(in srgb, var(--color-risk-crimson) 12%, transparent);
+  --color-fd-diff-remove-symbol: var(--color-risk-crimson);
+  --color-fd-diff-add: color-mix(in srgb, var(--color-risk-normal) 12%, transparent);
+  --color-fd-diff-add-symbol: var(--color-risk-normal);
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+/* Numbers that update or align use tabular figures, same rule as
+   web/app and web/landing (scores, addresses, contract ids, error
+   codes all read as data here too). */
+.font-mono,
+[data-numeric] {
+  font-feature-settings: "tnum" 1;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-risk-crimson));
+  outline-offset: 2px;
+}

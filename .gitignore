@@ -38,3 +38,15 @@ web/app/lib/contracts/*/node_modules/
 web/app/lib/contracts/*/out/
 
 web/shared/ui/node_modules/
+
+# Sylox docs (Fumadocs). Same ignore convention as every other
+# Next.js workspace here. The generated contract reference page
+# itself (content/docs/contract-reference.mdx - no ".generated" in
+# the filename, since Fumadocs derives this page's URL from it) IS
+# committed - see web/docs/scripts/generate-contract-reference.mjs's
+# own doc comment and CI's drift check, same convention as
+# packages/sdk/src/networks.generated.ts.
+web/docs/.next/
+web/docs/out/
+web/docs/node_modules/
+web/docs/tsconfig.tsbuildinfo
