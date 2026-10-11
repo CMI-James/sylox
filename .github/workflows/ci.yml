@@ -283,6 +283,25 @@ jobs:
             echo "::error::Run 'npm run generate:contract-reference -w web/docs' locally and commit the result."
             exit 1
           fi
+      # Sylox is protection, never insurance, and never promises a
+      # fixed or guaranteed return - this repo's own writing rule
+      # (see web/docs/content/docs/index.mdx's "Testnet only" section
+      # for the canonical phrasing to use instead). Grepping the real
+      # committed content catches a slip in a future PR (content is
+      # PR 4's own job, not this one) before it ever ships, rather
+      # than relying on every future author/reviewer to remember this
+      # by hand. Case-insensitive; matches whole words only so this
+      # never flags something like "insurance" inside an unrelated
+      # word or "APYRIGHT"-style false positive (there isn't one here,
+      # but the same guard pattern as this repo's own
+      # no-em-dash-guard.sh is worth keeping deliberate).
+      - name: Check for banned words in web/docs content
+        working-directory: web/docs
+        run: |
+          if grep -rinE '\b(insurance|guaranteed|APY)\b' content/; then
+            echo "::error::Found a banned word (insurance/guaranteed/APY) in web/docs/content. Sylox is protection, not insurance, and never promises a guaranteed return - see content/docs/index.mdx's Testnet only section for the house phrasing."
+            exit 1
+          fi
 
   docker-build-sylox-docs:
     name: build web/docs/Dockerfile image (no push)

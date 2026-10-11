@@ -302,7 +302,7 @@ function buildContractSection({ title, contractId, typesSource, clientSource }) 
 
 **Testnet contract address:** \`${contractId}\`
 
-Sample/testnet deployment only - this address changes on every
+Sample/testnet deployment only. This address changes on every
 redeploy. Always read it from this page (regenerated at build time
 from \`deployments/testnet.json\`) rather than copying it into your own
 code as a literal.
@@ -318,7 +318,7 @@ ${renderTypes(types)}
 ### Contract error codes
 
 Raw \`#[contracterror]\` codes as returned by the contract itself (its
-own doc-comment text, not the plain-English copy a caller sees - see
+own doc-comment text, not the plain-English copy a caller sees. See
 "SDK error messages" below for that).
 
 ${renderErrorTable(errorEntries)}
@@ -347,7 +347,7 @@ function buildSdkErrorsSection(errorsSource) {
 \`@sylox/sdk\` (\`packages/sdk/src/errors.ts\`) wraps each contract call
 with a plain-English message, keyed by the same numeric code, in a
 thrown \`SyloxError\`. These are the messages an app built on the SDK
-actually shows - not the raw contract error name above.
+actually shows, not the raw contract error name above.
 
 ${body}
 `;
@@ -378,7 +378,7 @@ function main() {
 
   const banner = `---
 title: Contract reference
-description: Contract addresses, functions, types, and error codes - generated from the deployed testnet contracts.
+description: Contract addresses, functions, types, and error codes, generated from the deployed testnet contracts.
 ---
 
 {/*
@@ -412,7 +412,7 @@ description: Contract addresses, functions, types, and error codes - generated f
 
 Testnet only. Every address, function, type, and error code below is
 read from the actual deployed testnet contracts and the SDK's own
-source at generation time - nothing on this page is hand-written.
+source at generation time. Nothing on this page is hand-written.
 `;
 
   const body = `${riskOracleSection}\n${eventRegistrySection}\n${sdkErrorsSection}`;
