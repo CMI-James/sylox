@@ -84,10 +84,14 @@ RUN curl -sSfL "https://github.com/stellar/stellar-cli/releases/download/v${STEL
 
 WORKDIR /app
 
-# Only deploy/ and the current deployment record, not the whole repo
+# Only deploy/ and the current deployment records, not the whole repo
 # (unlike web/app/Dockerfile, which needs the full monorepo for npm
 # workspace resolution): this image has no other dependency.
+# testnet-demo-asset.json is needed alongside testnet.json so
+# deploy/extend-ttl.sh can find the DEMOUSD contract and holder
+# addresses without anything beyond what's already copied in.
 COPY deploy/ deploy/
 COPY deployments/testnet.json deployments/testnet.json
+COPY deployments/testnet-demo-asset.json deployments/testnet-demo-asset.json
 
 ENTRYPOINT ["deploy/live-poster-entrypoint.sh"]

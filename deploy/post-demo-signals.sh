@@ -425,20 +425,47 @@ run_live_mode() {
   # one sub-epoch is a different situation from a quiet, healthy pass
   # (nothing to do but skips) or a pass that posted normally - it means
   # every attempt this run made hit a transient failure that survived
-  # its own retry too. Exiting 1 here makes a sustained RPC outage show
-  # up as a crashed run on Railway, instead of hiding behind a clean-
-  # looking "deferred N" line in an otherwise-successful-exit-code log.
-  # A run with only skips (posted == 0, deferred == 0: nothing NEW to
-  # post at all) still exits 0 - that is the normal, expected case on
-  # most 5-minute ticks.
+  # its own retry too. Returning 1 here makes a sustained RPC outage
+  # show up as a crashed run on Railway, instead of hiding behind a
+  # clean-looking "deferred N" line in an otherwise-successful-exit-
+  # code log. A run with only skips (posted == 0, deferred == 0:
+  # nothing NEW to post at all) still returns 0 - that is the normal,
+  # expected case on most 5-minute ticks.
+  #
+  # `return`, not `exit`: issue #28's TTL stopgap (deploy/extend-ttl.sh)
+  # must still run after this, win or lose - posting's own result is
+  # captured by the caller below and combined with the TTL step's own,
+  # rather than this function ending the whole script on the spot.
   if (( posted == 0 && deferred > 0 )); then
-    exit 1
+    return 1
   fi
+  return 0
 }
 
 if (( LIVE_MODE )); then
   log "Running one --live pass for $ASSET_ID (current and previous hour's closed sub-epochs only)"
-  run_live_mode
+  POSTING_EXIT=0
+  run_live_mode || POSTING_EXIT=$?
+
+  # Issue #28 stopgap: extend TTL on every tracked current-state entry
+  # that's under 14 days from expiry, to about 30 days, AFTER posting.
+  # Posting's own result always stands on its own: a TTL failure here
+  # never masks a successful posting pass (POSTING_EXIT already
+  # captured above), and a TTL failure never blocks or retries
+  # posting, which already ran. The real fix (extend TTL on write, per
+  # #28's policy) ships through upgrade(); remove this call and
+  # deploy/extend-ttl.sh once that lands.
+  log "Running the TTL stopgap (issue #28)"
+  TTL_EXIT=0
+  "$REPO_ROOT/deploy/extend-ttl.sh" testnet || TTL_EXIT=$?
+  if (( TTL_EXIT != 0 )); then
+    log "TTL stopgap failed (exit $TTL_EXIT); posting's own result above still stands"
+  fi
+
+  if (( POSTING_EXIT != 0 || TTL_EXIT != 0 )); then
+    exit 1
+  fi
+  exit 0
 else
   FIRST_POSTED=""
   LAST_POSTED=""
