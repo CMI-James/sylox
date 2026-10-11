@@ -1,0 +1,1254 @@
+---
+title: Contract reference
+description: Contract addresses, functions, types, and error codes - generated from the deployed testnet contracts.
+---
+
+{/*
+  GENERATED FILE - do not edit by hand.
+
+  Produced by scripts/generate-contract-reference.mjs from:
+    - deployments/testnet.json (contract addresses)
+    - packages/sdk/src/contracts/(risk-oracle, event-registry)/src/(types, client).ts (functions, types, raw contract error codes)
+    - packages/sdk/src/errors.ts (the plain-English SDK error messages)
+
+  Regenerate with `npm run generate:contract-reference -w web/docs`
+  (also runs automatically before dev/build/test via this package's
+  own npm lifecycle hooks) any time one of those source files changes,
+  then commit the result. CI's own drift-check step
+  (.github/workflows/ci.yml, the web/docs job) fails the build if this
+  file is out of sync with those sources, so it cannot silently drift
+  against a real redeploy.
+
+  MDX comments must use this slash-star form, not a plain HTML-style
+  bang comment (MDX's own parser rejects that one outright, and even
+  typing its exact syntax in prose here as plain text broke this very
+  banner once already - MDX scans for tag-like tokens before it gets
+  to parsing this block as JS). This also means the comment's own
+  CONTENTS are parsed as a JS expression (it is still a JSX expression
+  container) - this text deliberately avoids writing any bare curly
+  braces too (e.g. a brace-expansion-style path list), the other thing
+  that broke this same banner during development.
+*/}
+
+# Contract reference
+
+Testnet only. Every address, function, type, and error code below is
+read from the actual deployed testnet contracts and the SDK's own
+source at generation time - nothing on this page is hand-written.
+
+## RiskOracle
+
+**Testnet contract address:** `CCENSA5ANAJAFBFOEB7AFVXYLNFORH55IKAPJLZL2W37G6S3QKHYQOON`
+
+Sample/testnet deployment only - this address changes on every
+redeploy. Always read it from this page (regenerated at build time
+from `deployments/testnet.json`) rather than copying it into your own
+code as a literal.
+
+### Functions
+
+### `band`
+
+```ts
+band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<Band, Error>>>
+```
+
+### `live`
+
+```ts
+live(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<[SubEpoch, SignalSet, SlotState] | null>>
+```
+
+technical-doc.md Section 5.9 S5, 12.1 (v1.5): read-only, no auth.
+The newest posted sub-epoch and its effective state. Unlike
+`latest`, which keeps returning the newest HOUR's `SignalSet`
+(`Series`'s `require_holding` valuation and every existing
+integration already depend on that exact meaning, Section 5.9
+S5), `live` surfaces Pending, challengeable sub-epoch data; the
+app shows it as "Live" next to `latest()`/`score()`'s
+"Confirmed" values. Never used for `require_holding` or any
+other payout-adjacent valuation.
+
+### `ring`
+
+```ts
+ring(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Array<RingSlot>>>
+```
+
+technical-doc.md Section 5.8, 12.1: one storage read, oldest slot
+first. See `storage::get_ring`'s doc comment for exactly what
+"oldest first" means once the buffer has wrapped.
+
+### `score`
+
+```ts
+score(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<RiskScore, Error>>>
+```
+
+technical-doc.md Section 12.1, 6. Review item C1: a PURE read.
+Returns whatever `RiskScore` is currently stored, with `stale`
+recomputed fresh against the clock (so a score that was fresh
+when last written but has since gone quiet is reported stale
+without needing a write to say so). Never calls
+`storage::set_score` or any other write; the actual computation
+happens in `recompute_score`, called from `post_signals`, the
+finality sweep, and `finalize_endpoint` (see those for exactly
+when).
+
+Review decision D1: the stored `band` is always the plain
+hysteresis band, computed with no knowledge of the event-in-
+progress flag (see `recompute_score`), so that flipping the
+flag off is never confused with a genuine new epoch of evidence
+for the hysteresis streak. The "forced to at least Distress
+while in progress" override is applied here instead, on every
+read, which also makes it take effect immediately on
+`set_event_in_progress` with no recompute required.
+
+### `assets`
+
+```ts
+assets(options?: MethodOptions): Promise<AssembledTransaction<Array<string>>>
+```
+
+### `latest`
+
+```ts
+latest(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
+```
+
+### `migrate`
+
+```ts
+migrate(options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+Issue #12. Storage migration hook for a future `upgrade()`: runs
+at most once per `CONTRACT_VERSION`. Takes no argument - always
+migrates to this code's OWN current version, never a
+caller-chosen one (a governor could otherwise mark a future
+version "already migrated" before the code ever reaches it,
+permanently blocking that migration). Empty for now - no storage
+shape change ships with this PR - but every future upgrade that
+DOES change a stored type's shape migrates existing data here,
+gated the same way, with its own storage test (existing keys
+decode under the new types) alongside it.
+
+### `signals`
+
+```ts
+signals(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
+```
+
+### `upgrade`
+
+```ts
+upgrade(args: { new_wasm_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 17.3: "Core contracts expose
+upgrade(wasm_hash), callable only by the governor." Does NOT
+carry the 14 day timelock Section 17.2 assigns to `Upgrade`
+actions - that belongs to `Governor` (Section 17), which is not
+built yet (known gap, see deploy/README.md). This is the same
+direct, immediate governor-gated call every other call here
+already uses.
+
+### `version`
+
+```ts
+version(options?: MethodOptions): Promise<AssembledTransaction<number>>
+```
+
+Issue #12. The currently deployed code's own version, bumped by
+hand alongside each `upgrade()` this contract ships (see deploy/
+README.md's upgrade procedure). Lets anyone confirm what is
+actually deployed without guessing from a wasm hash.
+
+### `is_final`
+
+```ts
+is_final(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+Review item C5: whether epoch `epoch` is EFFECTIVELY final right
+now: its stored state is `Final`, or it is `Pending` and
+`pending_until` has already passed. `false` for a missing epoch.
+
+### `is_stale`
+
+```ts
+is_stale(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+### `add_asset`
+
+```ts
+add_asset(args: { cfg: AssetConfig }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1. Rejects an asset that is already
+registered (`update_asset` is for changing one). Review decision
+D3: also rejects `Reference::Asset` (no USD rate is defined
+anywhere in the spec for an asset pegged reference; see the PR's
+"Spec deviations").
+
+### `build_hour`
+
+```ts
+build_hour(args: { asset: string | Address; hour: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S4 (v1.5): permissionless. Builds
+`hour` if every one of its sub-epochs is Final, permanently
+missing, or rejected; `post_sub_signals` already attempts this
+inline on every post, so this exists for anyone to trigger a
+build that is ready but that no further posting has happened to
+trigger automatically (the same role `finalize_endpoint` plays
+for the hourly backward finality scan). Returns
+`SubEpochNotReady` if at least one sub-epoch is still Pending
+or Disputed; a never-posted hour (no sub-epoch at all, not even
+a missing one within an active interval) is equally not ready,
+since there is nothing to build from.
+
+### `check_stale`
+
+```ts
+check_stale(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<boolean, Error>>>
+```
+
+Re-review item C7 (lead decision): `asset_stale` now means "the
+asset TRANSITIONED into stale", not "a newly observed epoch
+happened to already be stale on arrival" (the old design's
+condition, which never fired at all for the realistic "keepers
+stopped posting" case, since nothing new ever arrives to
+trigger it). Permissionless: evaluates staleness against the
+epoch of the STORED score (never `newest_final`, which can run
+ahead of the stored score when `recompute_score` short
+circuits without writing, e.g. a sticky `Event` band or not
+enough history yet), emits `asset_stale` once if the asset is
+stale and `stale_announced` is not already set, sets the flag,
+and returns the current stale state either way. Calling this
+again while still stale emits nothing. Every state changing
+call that touches an asset runs the same check internally (see
+`check_stale_internal`), so a late backfill that is stale on
+arrival also emits, once, without needing anyone to call this
+explicitly; this function exists for a monitor tha
+
+### `first_epoch`
+
+```ts
+first_epoch(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
+```
+
+PR #25 review: read-only, no auth. The first epoch ever
+successfully posted for this asset. `EventRegistry`'s own
+Tier 1 Depeg and IssuerFreeze history baselines need this for
+the same reason `RiskOracle`'s own score and `median_liquidity`
+do: the newest epoch's own absolute number is always far
+larger than any window length on a real network, so it alone
+can never tell a brand-new asset from one with years of
+history. `None` before the asset's first posting.
+
+### `set_formula`
+
+```ts
+set_formula(args: { version: number; weights: Array<number>; params: Map<string, bigint> }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 6.2. `set_formula` rejects any
+weight set that does not sum to 10,000.
+
+### `asset_config`
+
+```ts
+asset_config(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<AssetConfig | null>>
+```
+
+### `newest_epoch`
+
+```ts
+newest_epoch(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
+```
+
+PR #15 review, finding F4: read-only, no auth. Wraps the
+existing `storage::get_newest_epoch_pub`, which reads the
+dedicated `RingNewest` key directly rather than the newest
+ring POSITION's own stored epoch. The two disagree exactly
+when the newest position is `Empty` (its epoch was overturned
+and not yet reposted): the position's slot reports epoch `0`
+(`empty_slot()`'s default), while `RingNewest` still correctly
+reports the real newest epoch ever written. `EventRegistry`
+needs the latter for its own `slot_for_epoch` arithmetic
+(`ring()`'s layout is "oldest first, ending at RingNewest");
+reading the former made every subsequent `slot_for_epoch` call
+miss, misclassifying every cure-window epoch as permanently
+missing.
+
+### `post_signals`
+
+```ts
+post_signals(args: { keeper: string | Address; asset: string | Address; s: SignalSet }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 5.2, 5.3, 11.3.
+
+Checks keeper eligibility against `Staking`, applies the full
+Section 11.3 sanity bounds, cross checks configured `PriceAdapter`s,
+and sources `endpoint` only from `Staking.aggregate` (never the
+keeper's payload). `s.endpoint` is only ever a placeholder on input.
+
+### `update_asset`
+
+```ts
+update_asset(args: { asset: string | Address; cfg: AssetConfig }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1: "rejects a change to cfg.reference".
+Review decision D3: also rejects `Reference::Asset`, same as
+`add_asset` (an existing asset can never have had this reference
+in the first place, since `add_asset` rejects it, but the check
+is repeated here rather than relying on that invariant holding
+forever).
+
+### `disable_asset`
+
+```ts
+disable_asset(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1.
+
+### `reference_rate`
+
+```ts
+reference_rate(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<bigint, Error>>>
+```
+
+technical-doc.md Section 12.1: reference to USD, SCALE 1e7. `Usd`
+is always `SCALE`; `Fiat` reads the asset's `FxAdapter` on the
+reference's recorded basis and fails closed on a stale or missing
+rate; `Asset` has no USD rate defined anywhere in the spec, so this
+fails rather than guessing one (see the PR's "Spec deviations").
+
+### `set_event_band`
+
+```ts
+set_event_band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 8.5, 8.8. Auth: the registry
+contract itself (the `registry` address `RiskOracle` was
+initialized with), per Section 16.1's contract-to-contract auth
+pattern.
+
+### `sub_peg_ratios`
+
+```ts
+sub_peg_ratios(args: { asset: string | Address; hour: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Array<bigint | null>>>
+```
+
+technical-doc.md Section 5.9 S5 (v1.5): read-only, no auth. Each
+of `hour`'s sub-epochs' own `peg_ratio`, in `sub` order, `None`
+for a sub-epoch that is not posted or not yet effectively Final
+or Pending (the same "Pending or Final" convention
+`EventRegistry.cover_gate`'s existing `RecentDepeg` check
+already reads from `Ring(asset)`, extended to `Sub(asset)` for
+an hour that has not built yet). `EventRegistry`'s own
+`cover_gate` calls this only for the current, not-yet-built
+hour (or hours, in the up-to-2h window an hour can stay
+waiting): every already-built hour inside its own trailing
+window is still read through `ring()` exactly as before this
+revision.
+
+### `dispute_signals`
+
+```ts
+dispute_signals(args: { disputer: string | Address; asset: string | Address; epoch: bigint; alt_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 5.4, 7.8.
+
+Records the dispute and locks the disputer's bond in `Staking`.
+Only the signal dispute STATE lives here; the bond itself is held
+and later split by `Staking` on instruction from
+`resolve_signal_dispute`.
+
+### `clear_event_band`
+
+```ts
+clear_event_band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 8.8.
+
+### `effective_window`
+
+```ts
+effective_window(args: { asset: string | Address; start_epoch: bigint; count: number }, options?: MethodOptions): Promise<AssembledTransaction<Array<SlotState | null>>>
+```
+
+Review item C5: a window read of effective state per epoch, for
+`EventRegistry`'s Tier 1 checks (Section 8.2), so it can learn
+which epochs in a window are final without one call per epoch.
+Missing epochs read `None`, the same convention as `ring`'s
+underlying storage.
+
+### `median_liquidity`
+
+```ts
+median_liquidity(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint>>
+```
+
+technical-doc.md Section 11.1: median of the newest 168 slots'
+`liquidity_2pct`, for the asset wide cover cap. Missing slots in
+the window are excluded, not treated as zero liquidity, so a short
+run of missing epochs does not crater the cap the way real zero
+liquidity would.
+
+### `post_sub_signals`
+
+```ts
+post_sub_signals(args: { keeper: string | Address; asset: string | Address; hour: bigint; sub: number; s: SignalSet }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S2 (v1.5). Posts a sub-epoch,
+keyed by `(hour, sub)` instead of a single `epoch`. Mirrors
+`post_signals`'s own checks (keeper eligibility, sanity bounds,
+AMM cross check), disputable for `signal_dispute_secs` exactly
+as the hourly path already specifies. Recomputes the hour's own
+provisional roll-up on every call, and attempts the hour's
+build inline, the same way `post_signals` already
+inline-triggers the hourly finality scan.
+
+### `sub_epoch_config`
+
+```ts
+sub_epoch_config(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<SubEpochConfig | null>>
+```
+
+technical-doc.md Section 5.9 S1 (v1.5): read-only, no auth. The
+asset's sub-epoch configuration, including a pending change not
+yet in effect.
+
+### `event_in_progress`
+
+```ts
+event_in_progress(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+technical-doc.md Section 12.1 (feat/event-registry design note,
+review item D6): read-only, no auth. Lets `EventRegistry` assert
+invariant E4 (its own active-event count agrees with this flag)
+directly, rather than inferring the flag only through its one
+visible effect on `band()`'s own Distress floor.
+
+### `finalize_endpoint`
+
+```ts
+finalize_endpoint(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 7.4. Reads `Staking.aggregate` and
+books it into the epoch's ring slot and `Signals` entry if
+`post_signals` had not already resolved one by the time it closed;
+then calls `Staking.settle_probes` exactly once regardless, per
+Section 7.4's "booked exactly once" requirement.
+
+### `overturned_signals`
+
+```ts
+overturned_signals(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
+```
+
+Review item C4: the `SignalSet` an overturned epoch's posting had
+before `resolve_signal_dispute` moved it out of `signals`'s live
+key, kept for audit. `None` if `epoch` was never overturned (or
+was overturned, reposted, and overturned again, which keeps only
+the most recent overturn, not a full history of every attempt).
+
+### `set_sub_epoch_secs`
+
+```ts
+set_sub_epoch_secs(args: { asset: string | Address; value: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S1, 16, 17.4 (v1.5). Auth: governor,
+the same `SetParam`-style path every other parameter in Section
+23 already uses; no new role or action type is needed. Takes
+effect from the NEXT hour boundary only (never the current,
+possibly-in-progress hour), so no sub-epoch already posted, or
+postable before that boundary, is ever reinterpreted under a
+different length.
+
+### `dispute_sub_signals`
+
+```ts
+dispute_sub_signals(args: { disputer: string | Address; asset: string | Address; hour: bigint; sub: number; alt_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S2, S3 (v1.5). Mirrors
+`dispute_signals` exactly, against `Sub(asset)`'s own ring: on
+dispute, the sub-epoch's record is copied out to
+`SubDispute(asset, hour, sub)` (so `Sub(asset)`'s fixed 60 slot
+ring can keep rotating underneath a ruling that takes up to
+`SIGNAL_DISPUTE_RULING_SECS`), and the HOUR's own `Ring(asset)`
+slot moves to `Disputed` via `refresh_waiting_hour`.
+
+### `set_event_in_progress`
+
+```ts
+set_event_in_progress(args: { asset: string | Address; in_progress: boolean }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+Review decision D1, not in the original Section 12.1 list. Auth:
+the registry contract, same pattern as `set_event_band` /
+`clear_event_band` (Section 16.1). While `true`, `score()` floors
+the band at `Distress` on every read (Section 6.3's "forced to
+Distress if a credit event... is Proposed, Challenged or
+Escalated"), independent of the hysteresis-protected band
+actually stored; `RiskOracle` never calls into `EventRegistry` to
+check this itself, matching the instruction that "the oracle
+never calls the registry" - this is pushed in, the same
+direction `set_event_band` already works.
+
+### `resolve_signal_dispute`
+
+```ts
+resolve_signal_dispute(args: { asset: string | Address; epoch: bigint; keeper_wins: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 12.1, 5.4, 7.8. Auth: the committee
+address, read fresh from `Governor.committee()` on every call (the
+committee can rotate; `RiskOracle` never caches it).
+
+### `resolve_sub_signal_dispute`
+
+```ts
+resolve_sub_signal_dispute(args: { asset: string | Address; hour: bigint; sub: number; keeper_wins: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S2, S4 (v1.5). Mirrors
+`resolve_signal_dispute` exactly, against `Sub(asset)`. On
+`keeper_wins`, the sub-epoch's slot becomes Final; on the
+disputer winning, it clears back to Empty (the overturned
+sub-epoch's own `SubSignals` entry is left in place for audit,
+the same way `Signals(asset, epoch)` is kept but no longer
+live after an hourly overturn) and can be reposted. Either way,
+`refresh_waiting_hour` re-derives the HOUR's own `Ring(asset)`
+state from every sub-epoch's current disposition, which may
+move the hour out of `Disputed` (if no other sub-epoch in it is
+still disputed) and, if this was the last undecided sub-epoch,
+trigger the hour's build.
+
+### `resolve_sub_dispute_timeout`
+
+```ts
+resolve_sub_dispute_timeout(args: { asset: string | Address; hour: bigint; sub: number }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 5.9 S2 (v1.5). Mirrors
+`resolve_signal_dispute_timeout` exactly, against
+`SubDispute(asset, hour, sub)`: the committee's silence is read
+the same way for a sub-epoch dispute as for an hourly one, the
+keeper's posting stands.
+
+### `sub_peg_ratios_in_span_batch`
+
+```ts
+sub_peg_ratios_in_span_batch(args: { asset: string | Address; hours: Array<bigint> }, options?: MethodOptions): Promise<AssembledTransaction<Array<Array<bigint | null>>>>
+```
+
+Section 5.9 S5 (v1.5, footprint-fix revision): `EventRegistry.
+cover_gate`'s own `RecentDepeg` check, for unbuilt hours still
+INSIDE `Sub(asset)`'s own 5-hour span (`SUB_RING_SLOTS *
+SUB_EPOCH_GRID_SECS`), never calling this for an hour outside
+it (the caller's own job to tell apart, using `newest_epoch`
+and those same constants: this function trusts its caller
+completely and does not re-check). Unlike `sub_peg_ratios` /
+the since-removed `sub_peg_ratios_batch`, this NEVER reads
+`HeldHour`: every hour it is asked about is assumed still
+physically present in `Sub(asset)`'s own ring, so `HeldHour` (a
+write-path, build/dispute-only concern, never a gate concern,
+per the Section 5.9 S5 footprint-fix review) plays no part
+here. One cross-contract call for every hour the gate needs,
+touching exactly ONE key (`Sub(asset)`, read once regardless of
+how many hours or sub-epochs are requested) rather than one key
+per hour: this is what makes the gate's own footprint constant
+regardless of how many hours are unbuilt (R10
+
+### `resolve_signal_dispute_timeout`
+
+```ts
+resolve_signal_dispute_timeout(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+ADR-010 (issue #4 fix). Permissionless, callable once
+`SIGNAL_DISPUTE_RULING_SECS` has passed since `dispute_signals`
+opened this dispute, if the committee still has not ruled via
+`resolve_signal_dispute`. Default outcome mirrors ADR-002's
+rule for data backed claims: the keeper's posting stands (slot
+`Final`, same as a `keeper_wins: true` committee ruling). "Both
+bonds released in full, nobody slashed" (the task's own
+wording): there is only one actual `BondKey::SignalDispute`
+lock to release, the disputer's (technical-doc.md Section 24.2
+notes a keeper has no symmetric per-signal bond in v1; only
+`slash`, by address, ever touches a keeper's stake), so in
+practice this means the disputer's bond is refunded
+(`release_bond`, not `forfeit_bond`) AND the keeper's stake is
+left untouched (no `slash` call either) - both parties come
+out exactly as they would from a `keeper_wins: true` ruling,
+which is the committee's silence being read as "no evidence
+the posting was wrong", not as a loss for either side.
+
+### Types
+
+### `HourBuiltEvent`
+
+Struct.
+
+technical-doc.md Section 5.9 S4, Section 13.
+
+### `AssetStaleEvent`
+
+Struct.
+
+Event: AssetStale
+
+### `BandChangedEvent`
+
+Struct.
+
+Event: BandChanged
+
+### `ScoreUpdatedEvent`
+
+Struct.
+
+Event: ScoreUpdated
+
+### `SignalsFinalEvent`
+
+Struct.
+
+Event: SignalsFinal
+
+### `SignalsPostedEvent`
+
+Struct.
+
+Event: SignalsPosted
+
+### `SignalsDisputedEvent`
+
+Struct.
+
+Event: SignalsDisputed
+
+### `SignalsResolvedEvent`
+
+Struct.
+
+Event: SignalsResolved
+
+### `SubSignalsFinalEvent`
+
+Struct.
+
+Event: SubSignalsFinal
+
+### `SubSignalsPostedEvent`
+
+Struct.
+
+technical-doc.md Section 5.9 (v1.5), Section 13.
+
+### `EndpointFinalizedEvent`
+
+Struct.
+
+Event: EndpointFinalized
+
+### `SubSignalsDisputedEvent`
+
+Struct.
+
+Event: SubSignalsDisputed
+
+### `SubSignalsResolvedEvent`
+
+Struct.
+
+Event: SubSignalsResolved
+
+### `SubEpochSecsChangedEvent`
+
+Struct.
+
+technical-doc.md Section 5.9 S1, Section 13.
+
+### `SignalDisputeTimedOutEvent`
+
+Struct.
+
+ADR-010 (feat/staking, issue #4 fix).
+
+### `SubSignalDisputeTimedOutEvent`
+
+Struct.
+
+Event: SubSignalDisputeTimedOut
+
+### `Band`
+
+Union/type alias.
+
+Union: Band
+
+### `RiskScore`
+
+Struct.
+
+The latest computed risk score for an asset. technical-doc.md Section 4.2.
+
+### `RingSlot`
+
+Struct.
+
+One epoch slot of the per asset ring buffer that Tier 1 checks, the
+cover gate and the 24 hour and 7 day aggregates read in a single entry,
+instead of separate `Signals(asset, epoch)` entries.
+technical-doc.md Section 5.8, ADR-005.
+
+### `SubEpoch`
+
+Struct.
+
+Identifies one sub-epoch at the posting/dispute API boundary:
+`hour`, and `sub`, its position within that hour under whichever
+`sub_epoch_secs` governed it. technical-doc.md Section 5.9 S2.
+`Sub(asset)`'s own ring stores a different identity internally
+(`sub_start`, the sub-epoch's absolute start time, Section 5.9 S3),
+since what `sub` means depends on an interval that can later
+change; `SubEpoch` is the human-meaningful pair a keeper posts
+against, converted internally to `sub_start`.
+
+### `Reference`
+
+Union/type alias.
+
+Union: Reference
+
+### `SignalSet`
+
+Struct.
+
+One epoch's measured signals for one asset. technical-doc.md Section 4.1.
+
+### `SlotState`
+
+Union/type alias.
+
+Finality of one ring buffer slot. technical-doc.md Section 5.8.
+
+### `AssetConfig`
+
+Struct.
+
+Configuration for one issued asset covered by the RiskOracle.
+technical-doc.md Section 4.1.
+
+### `IssuerFlags`
+
+Struct.
+
+The classic issuer flags that make an issuer freeze possible. An
+IssuerFreeze definition can be registered only if at least one is set.
+technical-doc.md Section 4.1, ADR-006.
+
+### `FxRateSource`
+
+Union/type alias.
+
+Which FX rate a `Reference::Fiat` is priced against. Matters wherever an
+official rate and a market (parallel) rate diverge, for example ARS.
+technical-doc.md Section 4.1, ADR-006.
+
+### `IssuerActions`
+
+Struct.
+
+Struct: IssuerActions
+
+### `EndpointStatus`
+
+Union/type alias.
+
+Union: EndpointStatus
+
+### `SubEpochConfig`
+
+Struct.
+
+Per asset sub-epoch configuration. technical-doc.md Section 15.1
+`SubEpochConfig(asset)`, Section 5.9 S1. `sub_epoch_secs` is the
+value currently in effect; `pending_sub_epoch_secs` and
+`effective_from_hour` describe a queued change that has not yet
+taken effect (both `None` when no change is pending). A change
+never applies before `effective_from_hour`, so no sub-epoch
+already posted, or postable before that boundary, is ever
+reinterpreted under a different length.
+
+### `UpgradedEvent`
+
+Struct.
+
+technical-doc.md Section 17.3. `contract` is `env.current_contract_
+address()`, so an indexer watching this topic across every Sylox
+contract can tell which one just upgraded without decoding the event's
+own emitting address separately.
+
+### Contract error codes
+
+Raw `#[contracterror]` codes as returned by the contract itself (its
+own doc-comment text, not the plain-English copy a caller sees - see
+"SDK error messages" below for that).
+
+| Code | Name | Notes |
+| --- | --- | --- |
+| 1 | `AlreadyInitialized` | - |
+| 2 | `NotInitialized` | - |
+| 3 | `Unauthorized` | Never actually returned by any call in this contract: every authorization check (`add_asset`, `update_asset`, `set_formula`, `post_signals`, `dispute_signals`, `resolve_signal_dispute`, `set_event_band`, `clear_event_band`, `set_event_in_progress`) goes through Soroban's native `Address::require_auth()`, which traps the host call directly rather than returning a `Result` this contract could wrap in `Error::Unauthorized`. Kept for `technical-doc.md` Section 14 code-number compatibility; see `missing_auth_traps_natively_rather_than_returning_unauthorized` in test.rs and the PR's "Review fixes" section for why this is documented as unreachable rather than tested as reachable. |
+| 4 | `Paused` | - |
+| 5 | `MathOverflow` | - |
+| 100 | `UnknownAsset` | - |
+| 101 | `KeeperNotActive` | - |
+| 102 | `WrongEpoch` | - |
+| 103 | `EpochAlreadyPosted` | - |
+| 104 | `SanityBoundFailed` | - |
+| 105 | `AmmCrossCheckFailed` | - |
+| 106 | `DisputeWindowClosed` | - |
+| 107 | `WeightsInvalid` | - |
+| 108 | `ReferenceImmutable` | - |
+| 109 | `ReferenceRateUnavailable` | - |
+| 110 | `AggregationFailed` | Distinct from `SanityBoundFailed` (104), which is about one posted `SignalSet`'s fields; this is about computing the score from the ring (not enough history, or a required window read came back empty), a different failure mode a caller may want to handle differently (for example: retry later vs. a permanently bad posting). Review item "Aggregation failures must not reuse SanityBoundFailed." |
+| 111 | `ReferenceNotSupported` | `add_asset` / `update_asset` reject `Reference::Asset` in v1 (review decision D3): no USD rate is defined anywhere in the spec for an asset pegged reference (see the PR's "Spec deviations"). |
+| 112 | `RulingDeadlineNotReached` | ADR-010 (feat/staking, issue #4 fix): `resolve_signal_dispute_timeout` called before `SIGNAL_DISPUTE_RULING_SECS` has passed since the dispute opened. Named to match ADR-002's `RulingDeadlineNotReached` precedent for the analogous event-ruling timeout. |
+| 113 | `InvalidSubEpochInterval` | technical-doc.md Section 5.9 S1: `sub_epoch_secs` set to a value outside the allowed set, or one that does not divide 3,600 evenly. |
+| 114 | `SubEpochNotReady` | technical-doc.md Section 5.9 S4: `build_hour` called while at least one of the hour's sub-epochs is still Pending or Disputed, i.e. not yet Final, permanently missing, or rejected. |
+| 115 | `HourAlreadyPosted` | technical-doc.md Section 5.9 S2: an hour is posted through exactly one path, sub-epoch or hourly fallback, never both. A sub-epoch post against an hour already posted through the fallback path, or a fallback post against an hour that already has a sub-epoch posted, both return this. |
+| 116 | `AlreadyMigrated` | Issue #12: `migrate` called with a `target_version` already applied (or an older one). Each storage-shape migration runs at most once; a second call for the same (or an earlier) version is a no-op request, not a retry of something that failed. |
+
+## EventRegistry
+
+**Testnet contract address:** `CBKLNYRCZJXMKZUPZRFEZU4SALCOUGXF7MX766ZHVFRH5UN5WXLVDPGG`
+
+Sample/testnet deployment only - this address changes on every
+redeploy. Always read it from this page (regenerated at build time
+from `deployments/testnet.json`) rather than copying it into your own
+code as a literal.
+
+### Functions
+
+### `rule`
+
+```ts
+rule(args: { event_id: bigint; declare: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+### `event`
+
+```ts
+event(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<EventRecord | null>>
+```
+
+### `covers`
+
+```ts
+covers(args: { event_id: bigint; def_version: number; start: bigint; expiry: bigint }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+technical-doc.md Section 8.6.
+
+### `migrate`
+
+```ts
+migrate(options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+Issue #12. Storage migration hook for a future `upgrade()`: runs
+at most once per `CONTRACT_VERSION`. Takes no argument - always
+migrates to this code's OWN current version, never a
+caller-chosen one (a governor could otherwise mark a future
+version "already migrated" before the code ever reaches it,
+permanently blocking that migration). Empty for now - no storage
+shape change ships with this PR - but every future upgrade that
+DOES change a stored type's shape migrates existing data here,
+gated the same way, with its own storage test (existing keys
+decode under the new types) alongside it.
+
+### `upgrade`
+
+```ts
+upgrade(args: { new_wasm_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 17.3: "Core contracts expose
+upgrade(wasm_hash), callable only by the governor." After 12
+months on mainnet, Section 17.3 also notes governance plans to
+remove `upgrade` from `EventRegistry` entirely (deploying v2
+alongside instead); not relevant yet on testnet.
+
+### `version`
+
+```ts
+version(options?: MethodOptions): Promise<AssembledTransaction<number>>
+```
+
+Issue #12. The currently deployed code's own version, bumped by
+hand alongside each `upgrade()` this contract ships (see deploy/
+README.md's upgrade procedure). Lets anyone confirm what is
+actually deployed without guessing from a wasm hash.
+
+### `finalize`
+
+```ts
+finalize(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+technical-doc.md Section 8.1, as corrected by design review
+items D1 (cure window), D2/R2/R3 (three-way epoch state) and R1
+(cure strictness). See `docs/design/event-registry.md` Section 5.
+
+### `challenge`
+
+```ts
+challenge(args: { challenger: string | Address; event_id: bigint; evidence: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+### `cover_gate`
+
+```ts
+cover_gate(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<CoverGate, Error>>>
+```
+
+technical-doc.md Section 9.4 step 2, ADR-003. First-match order.
+Thresholds and windows come from the asset's own canonical
+Depeg definition where one is registered; the Section 23
+default applies otherwise (matching Section 9.4's own stated
+fallback rule verbatim). WithdrawalHalt is out of scope for
+this build (no canonical definition of that kind can exist
+yet), so its own window always uses the Section 23 default.
+
+### `definition`
+
+```ts
+definition(args: { asset: string | Address; kind: EventKind; version: number }, options?: MethodOptions): Promise<AssembledTransaction<EventDefinition | null>>
+```
+
+### `in_progress`
+
+```ts
+in_progress(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+### `event_status`
+
+```ts
+event_status(args: { asset: string | Address; kind: EventKind }, options?: MethodOptions): Promise<AssembledTransaction<AssetEventStatus>>
+```
+
+### `has_declared`
+
+```ts
+has_declared(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
+```
+
+### `propose_tier1`
+
+```ts
+propose_tier1(args: { caller: string | Address; asset: string | Address; kind: EventKind; version: number }, options?: MethodOptions): Promise<AssembledTransaction<Result<bigint, Error>>>
+```
+
+technical-doc.md Section 8.2, as amended by this build's lead
+decision (design note Section 2) and design review item D3.
+
+### `checkpoint_cure`
+
+```ts
+checkpoint_cure(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<CureProgress, Error>>>
+```
+
+PR #15 review, finding F2. Permissionless (no `require_auth`):
+anyone, including the keeper service, may call this to record
+a Depeg event's cure-window progress before an epoch that is
+already decidable rotates out of `RiskOracle`'s own ring.
+Unlike `finalize`, this never errors on "not ready" - recording
+whatever is currently decidable, and keeping that record, is
+itself the successful outcome; there being more to record later
+is not a failure. Calling it twice in a row is a no-op the
+second time (`record_cure_progress`'s own recorded-bit check).
+
+### `current_version`
+
+```ts
+current_version(args: { asset: string | Address; kind: EventKind }, options?: MethodOptions): Promise<AssembledTransaction<number>>
+```
+
+### `resolve_timeout`
+
+```ts
+resolve_timeout(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
+```
+
+### `ruling_deadline`
+
+```ts
+ruling_deadline(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
+```
+
+### `committee_misses`
+
+```ts
+committee_misses(args: { committee: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<number>>
+```
+
+### `active_event_count`
+
+```ts
+active_event_count(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<number>>
+```
+
+### `register_definition`
+
+```ts
+register_definition(args: { def: EventDefinition }, options?: MethodOptions): Promise<AssembledTransaction<Result<number, Error>>>
+```
+
+technical-doc.md Section 8.8. `def.version` is ignored on input
+(the caller cannot pick a version number); the stored version is
+always the previous canonical version plus one, starting at 1.
+
+### Types
+
+### `EventCuredEvent`
+
+Struct.
+
+Event: EventCured
+
+### `EventDeclaredEvent`
+
+Struct.
+
+Event: EventDeclared
+
+### `EventProposedEvent`
+
+Struct.
+
+Event: EventProposed
+
+### `EventRejectedEvent`
+
+Struct.
+
+Event: EventRejected
+
+### `EventEscalatedEvent`
+
+Struct.
+
+Event: EventEscalated
+
+### `RulingTimedOutEvent`
+
+Struct.
+
+Event: RulingTimedOut
+
+### `EventChallengedEvent`
+
+Struct.
+
+Event: EventChallenged
+
+### `DefinitionRegisteredEvent`
+
+Struct.
+
+Event: DefinitionRegistered
+
+### `CureProgress`
+
+Struct.
+
+PR #15 review, finding F2. Bit `i` of `recorded` is set once the
+cure-window epoch `first_cure_epoch + i` has been observed Final or
+PermanentlyMissing at least once; `any_below_threshold`/
+`any_missing` are the OR of every such observation so far. A `u128`
+bitmap comfortably covers the up-to-72 cure epochs `challenge_secs`
+can specify (finding F3's own bound), with headroom to spare.
+Deliberately never clears a bit once set: a disposition, once
+observed Final or PermanentlyMissing, cannot change (an epoch that
+is genuinely Final never reverts to Pending or Disputed, and
+PermanentlyMissing is a statement about elapsed time, which never
+un-elapses), so recording is monotonic and `checkpoint_cure` is
+naturally idempotent.
+
+### `Reference`
+
+Union/type alias.
+
+Union: Reference
+
+### `FxRateSource`
+
+Union/type alias.
+
+Which FX rate a `Reference::Fiat` is priced against. Matters wherever an
+official rate and a market (parallel) rate diverge, for example ARS.
+technical-doc.md Section 4.1, ADR-006.
+
+### `CoverGate`
+
+Union/type alias.
+
+Result of `EventRegistry::cover_gate(asset)`: whether new cover may be
+bought on an asset right now (ADR-003). technical-doc.md Section 9.4.
+
+### `EventKind`
+
+Union/type alias.
+
+Union: EventKind
+
+### `EventState`
+
+Union/type alias.
+
+Union: EventState
+
+### `EventRecord`
+
+Struct.
+
+One proposed credit event, keyed by `(asset, kind, def_version)`
+(ADR-001). technical-doc.md Section 4.3.
+
+### `EventDefinition`
+
+Struct.
+
+The canonical, versioned rules for one event kind on one asset.
+Stored by `(asset, kind, version)`; exactly one version per
+`(asset, kind)` is canonical at a time (ADR-001).
+technical-doc.md Section 4.3.
+
+Parameters that do not apply to `kind` must be zero; `register_definition`
+rejects a definition that sets them.
+
+### `AssetEventStatus`
+
+Union/type alias.
+
+Returned by `EventRegistry::event_status(asset, kind)`, which is per
+`(asset, kind)` for the canonical version (ADR-001).
+technical-doc.md Section 12.2.
+
+### `UpgradedEvent`
+
+Struct.
+
+technical-doc.md Section 17.3. `contract` is `env.current_contract_
+address()`, so an indexer watching this topic across every Sylox
+contract can tell which one just upgraded without decoding the event's
+own emitting address separately.
+
+### Contract error codes
+
+Raw `#[contracterror]` codes as returned by the contract itself (its
+own doc-comment text, not the plain-English copy a caller sees - see
+"SDK error messages" below for that).
+
+| Code | Name | Notes |
+| --- | --- | --- |
+| 1 | `AlreadyInitialized` | - |
+| 2 | `NotInitialized` | - |
+| 3 | `Unauthorized` | Never actually returned: every authorization check goes through Soroban's native `Address::require_auth()`, which traps the host call directly rather than returning a `Result` this contract could wrap. Kept for cross-contract error code compatibility, the same reasoning `RiskOracle`/`Staking`/ `Treasury` document for their own copies of this code. |
+| 4 | `Paused` | Not currently reachable: this contract has no pause integration in this build (Section 16.2 lists no EventRegistry-specific pause scope). Kept for code number compatibility. |
+| 5 | `MathOverflow` | Checked arithmetic failed: the IssuerFreeze check's own running clawback-amount and revocation-count sums over its 7 day window, and the clawback ratio's own scale-up before dividing by supply. Bounded by realistic USDC amounts in practice (each term already passed `RiskOracle.post_signals`'s own sanity bounds), but checked rather than assumed, matching `Staking`'s/`Treasury`'s own convention. |
+| 200 | `UnknownDefinition` | No `EventDefinition` stored under the requested (asset, kind, version). |
+| 201 | `EventInProgress` | `propose_tier1` while a non-terminal event already exists for this (asset, kind, version) (invariant E3). |
+| 202 | `Tier1CheckFailed` | A Tier 1 proposal's ring-buffer check did not meet the definition: too many missing epochs, a present epoch past threshold, or a liquidity baseline below `min_liquidity` (design note Section 3). |
+| 203 | `InsufficientBond` | `challenge`'s bond lock in `Staking` failed. Not reachable as built: `challenge` calls `Staking.lock_bond` directly (not a `try_*` variant), so a real failure on `Staking`'s own side (for example, the challenger's USDC balance too low for the transfer) traps the call rather than returning a `Result` this contract could translate into its own error code, the same reasoning every other cross-contract call in this workspace follows. Kept for code number compatibility. |
+| 204 | `ChallengeWindowOpen` | `finalize` called before `challenge_secs` has elapsed since `proposed_at`. |
+| 205 | `ChallengeWindowClosed` | `challenge` called after `challenge_secs` has elapsed, or against an event no longer `Proposed`. |
+| 206 | `WrongState` | A function's own required state (`Proposed`, `Escalated`, ...) does not match the event's current one. |
+| 207 | `CooldownActive` | Unreachable as built (design note review item D4): a fixed post-resolution cooldown was in the original spec design but is replaced here by a new-data test (`window_start > left_at`), which `propose_tier1` enforces itself rather than returning a distinct "still cooling down" code. Kept for code number compatibility. |
+| 208 | `InvalidDefinition` | `register_definition`'s own validation failed: asset unknown, `reference` mismatch, a parameter unused by `kind` is non zero, or the window plus baseline does not fit the ring buffer. |
+| 209 | `FreezeImpossible` | An IssuerFreeze definition for an asset whose `issuer_flags` allow neither revocation nor clawback. |
+| 210 | `DefinitionInUse` | A live series still pins the version `register_definition` would supersede. Unreachable in this build (no `MarketFactory` to report a live series at all, so this check never finds one to object to); kept for code number compatibility and for the day `MarketFactory` exists. |
+| 211 | `RulingDeadlinePassed` | `rule` called after the ruling deadline; use `resolve_timeout`. |
+| 212 | `RulingDeadlineNotReached` | `resolve_timeout` called before the ruling deadline. |
+| 213 | `DataNotFinal` | New (feat/event-registry, design note review item D2/R2/R3): `finalize` on a Depeg proposal whose cure window still has an epoch that is neither effectively Final nor permanently missing (still `Pending` before its own `pending_until`, or `Disputed` and unresolved, or `Empty` but still inside its own backfill window). Not a failure: callable again once the data settles one way or the other. |
+| 214 | `VersionNotCovered` | New (feat/event-registry, design note review item D3): `version` is registered but not acceptable: neither the current canonical version for (asset, kind) nor pinned by any live series (the latter check is a stand-in returning `false` until `MarketFactory` exists, Section 2 of the design note). |
+| 215 | `UnknownEvent` | New (feat/event-registry): `challenge`, `finalize`, `rule` or `resolve_timeout` against an `event_id` with no stored `EventRecord`. Kept distinct from `UnknownDefinition` (no canonical definition, or no such version), since these are different questions: one is about a DEFINITION, the other about a specific PROPOSAL. |
+| 216 | `AlreadyMigrated` | Issue #12: `migrate` called with a `target_version` already applied (or an older one). Each storage-shape migration runs at most once; a second call for the same (or an earlier) version is a no-op request, not a retry of something that failed. |
+
+## SDK error messages
+
+`@sylox/sdk` (`packages/sdk/src/errors.ts`) wraps each contract call
+with a plain-English message, keyed by the same numeric code, in a
+thrown `SyloxError`. These are the messages an app built on the SDK
+actually shows - not the raw contract error name above.
+
+### `finalizeError` (EventRegistry.finalize)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 2 | `NotInitialized` | The protocol isn't ready yet. Try again in a moment. |
+| 200 | `UnknownDefinition` | This event's rules (its definition) couldn't be found. |
+| 204 | `ChallengeWindowOpen` | The challenge window for this event is still open. |
+| 206 | `WrongState` | This event has already moved past this step. |
+| 213 | `DataNotFinal` | This event's price data isn't fully settled yet. Try again once the pending hours finalize. |
+| 215 | `UnknownEvent` | This event no longer exists. |
+
+### `checkpointCureError` (EventRegistry.checkpoint_cure)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 2 | `NotInitialized` | The protocol isn't ready yet. Try again in a moment. |
+| 200 | `UnknownDefinition` | This event's rules (its definition) couldn't be found. |
+| 206 | `WrongState` | This event has already moved past this step, or doesn't use a cure check. |
+| 215 | `UnknownEvent` | This event no longer exists. |
+
+### `scoreError` (RiskOracle.score)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 100 | `UnknownAsset` | This asset isn't tracked by the oracle. |
+
+### `coverGateError` (EventRegistry.cover_gate)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 2 | `NotInitialized` | The protocol isn't ready yet. Try again in a moment. |
+
+### `proposeTier1Error` (EventRegistry.propose_tier1)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 2 | `NotInitialized` | The protocol isn't ready yet. Try again in a moment. |
+| 200 | `UnknownDefinition` | This asset has no canonical Depeg definition registered yet. |
+| 201 | `EventInProgress` | An event is already open for this asset and kind. |
+| 202 | `Tier1CheckFailed` | The ring buffer data doesn't meet the definition's own threshold for this proposal. |
+| 214 | `VersionNotCovered` | This definition version isn't the current canonical one and isn't pinned by any live cover. |
+
+### `challengeError` (EventRegistry.challenge)
+
+| Code | Contract error name | Message shown to a caller |
+| --- | --- | --- |
+| 2 | `NotInitialized` | The protocol isn't ready yet. Try again in a moment. |
+| 205 | `ChallengeWindowClosed` | The challenge window for this event has already closed. |
+| 206 | `WrongState` | This event can no longer be challenged - it has moved past that step. |
+| 215 | `UnknownEvent` | This event no longer exists. |

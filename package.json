@@ -5,6 +5,7 @@
     "web/app",
     "web/landing",
     "web/shared/ui",
+    "web/docs",
     "packages/sdk"
   ]
 }

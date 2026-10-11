@@ -1,0 +1,12 @@
+{
+  "title": "Sylox Docs",
+  "pages": [
+    "index",
+    "contract-reference",
+    "concepts",
+    "integration-guides",
+    "sdk-reference",
+    "protection-markets",
+    "running-a-keeper-or-reporter"
+  ]
+}
