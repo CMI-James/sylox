@@ -100,20 +100,18 @@ DEMO_ISSUER=sylox-demo-issuer
 log() { echo "==> $*"; }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
-# Parses an i128 value out of `stellar contract invoke --send=no`'s own
-# output. Review finding (this session): that output wraps a plain
-# integer return in literal double quotes (e.g. ["1500000000"], not
-# 1500000000), which a bare ^[0-9]+$ match against the raw string never
-# matches - so a check written as "if it looks like a number and is
-# > 0" silently fell through to its own else branch for EVERY holder
-# that already had a real, nonzero balance, treating "already funded"
-# as "needs minting". This is what let an earlier run double-mint (the
-# real holder history: 100 + 100 - 50 = 150, not the 100 - 50 = 50 the
-# original fix assumed - see docs/event-0-demousd-issuer-freeze.md).
-# Strips one leading/trailing double quote if present, then requires
-# the result to be ALL digits - never falls back to treating an
-# unparseable value as zero or "skip", since either silently mints
-# into an unknown real balance.
+# Parses an i128 value out of `stellar contract invoke --send=no`'s
+# own output, which wraps a plain integer return in literal double
+# quotes (e.g. "1500000000", not 1500000000). A bare ^[0-9]+$ match
+# against that raw string never matches, so a check written as "if it
+# looks like a number and is > 0" silently fell through to its own
+# else branch for every holder that already had a real, nonzero
+# balance, treating "already funded" as "needs minting" (see
+# docs/event-0-demousd-issuer-freeze.md for what that actually caused
+# on this testnet). Strips one leading/trailing double quote if
+# present, then requires the result to be ALL digits - never falls
+# back to treating an unparseable value as zero or "skip", since
+# either of those silently mints into an unknown real balance.
 parse_i128() {
   local raw="$1" label="$2"
   local cleaned="${raw#\"}"
@@ -122,6 +120,34 @@ parse_i128() {
     die "could not parse $label as an integer (got: $raw)"
   fi
   echo "$cleaned"
+}
+
+# Runs `stellar contract invoke --send=no ...` (every argument after
+# `label` passed through verbatim) and prints ONLY its stdout -
+# whatever that call's own return value actually is, never mixed with
+# a CLI warning on stderr. A stray stderr line (a deprecation notice,
+# a retry warning) landing in the same string as the real return value
+# is exactly the kind of thing that broke the quoted-i128 parsing this
+# script already had to fix once; capturing them separately stops that
+# class of bug from coming back through a different call site. Dies
+# with the real exit status and the real stderr content (read back
+# from a temp file, not re-merged into stdout) on failure, rather than
+# the caller trying to parse a failure message as if it were data.
+invoke_read() {
+  local label="$1"
+  shift
+  local stderr_file out rc
+  stderr_file="$(mktemp)"
+  out="$("$STELLAR_BIN" contract invoke "$@" 2>"$stderr_file")"
+  rc=$?
+  if (( rc != 0 )); then
+    local err
+    err="$(cat "$stderr_file")"
+    rm -f "$stderr_file"
+    die "$label: stellar contract invoke failed (exit $rc): $err"
+  fi
+  rm -f "$stderr_file"
+  echo "$out"
 }
 
 # Reads whether `trustor`'s trustline to `asset_code:asset_issuer` is
@@ -143,6 +169,44 @@ read_trustline_authorized() {
   [[ -n "$authorized" && "$authorized" != "null" ]] \
     || die "$trustor has no $asset_code:$asset_issuer trustline to check authorization on"
   echo "$authorized"
+}
+
+# The jq half of find_revoke_tx_hash, factored out so it can be tested
+# against a small local JSON sample (deploy/test-demo-asset-trigger-
+# parse-i128.sh) without a real Horizon call. Takes Horizon's own
+# /accounts/{id}/operations response (already fetched) and returns the
+# most recent (the list is order=desc, so [0] is newest)
+# set_trust_line_flags operation's transaction_hash for this exact
+# trustor/asset_code pair, or empty if none matches.
+select_revoke_tx_hash_from_ops() {
+  local ops_json="$1" trustor="$2" asset_code="$3"
+  echo "$ops_json" | jq -r --arg trustor "$trustor" --arg code "$asset_code" \
+    '[._embedded.records[] | select(.type == "set_trust_line_flags" and .trustor == $trustor and .asset_code == $code)][0].transaction_hash // empty'
+}
+
+# Finds the real transaction hash of `issuer`'s most recent
+# set_trust_line_flags operation against `trustor`'s trustline to
+# asset_code, straight from Horizon. Used only when
+# read_trustline_authorized finds the trustline ALREADY deauthorized
+# (a prior interrupted run of this script got that far before dying),
+# so the evidence posted in step 6 still carries the real revoke
+# transaction hash rather than an empty one. This script only ever
+# calls set-trustline-flags with --clear-authorize (never a
+# re-authorize), so matching on type + trustor + asset_code alone is
+# unambiguous for this issuer; there is no second, opposite-direction
+# set_trust_line_flags call anywhere in this codebase to confuse it
+# with. Dies rather than return empty if no match is found: posting
+# evidence with no revoke hash at all is worse than stopping here.
+find_revoke_tx_hash() {
+  local issuer_addr="$1" trustor="$2" asset_code="$3"
+  local ops_json
+  ops_json="$(curl -sSf "$HORIZON_URL/accounts/$issuer_addr/operations?order=desc&limit=200" 2>&1)" \
+    || die "could not read $issuer_addr's operations from Horizon: $ops_json"
+  local tx_hash
+  tx_hash="$(select_revoke_tx_hash_from_ops "$ops_json" "$trustor" "$asset_code")"
+  [[ -n "$tx_hash" ]] \
+    || die "could not find a set_trust_line_flags operation against $trustor's $asset_code trustline in $issuer_addr's last 200 operations; the trustline reads deauthorized but its own revoke transaction cannot be located"
+  echo "$tx_hash"
 }
 
 # Real circulating supply for DEMOUSD, in stroops (SCALE 1e7), read
@@ -216,8 +280,8 @@ log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
 # from the chain, not assumed) is still zero.
 
 log "[2/6] DEMOUSD balance for $HOLDER_ADDR"
-holder_balance_before_raw="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-  --network testnet --send=no -- balance --id "$HOLDER_ADDR" 2>&1)"
+holder_balance_before_raw="$(invoke_read "$HOLDER_ADDR's DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+  --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
 holder_balance_before="$(parse_i128 "$holder_balance_before_raw" "$HOLDER_ADDR's DEMOUSD balance")"
 if (( holder_balance_before > 0 )); then
   log "$HOLDER_ADDR already holds $holder_balance_before stroops of DEMOUSD; not minting again"
@@ -272,8 +336,8 @@ done
 # differ (they should not, for a single whole clawback, but the posted
 # number must be the real one regardless).
 
-holder_balance_now_raw="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-  --network testnet --send=no -- balance --id "$HOLDER_ADDR" 2>&1)"
+holder_balance_now_raw="$(invoke_read "$HOLDER_ADDR's real DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+  --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
 holder_balance_now="$(parse_i128 "$holder_balance_now_raw" "$HOLDER_ADDR's real DEMOUSD balance")"
 CLAWBACK_REQUEST=$(( holder_balance_now / 2 ))   # Half of whatever the holder really holds right now.
 (( CLAWBACK_REQUEST > 0 )) || die "$HOLDER_ADDR holds $holder_balance_now stroops of DEMOUSD; nothing to claw back"
@@ -300,7 +364,8 @@ $revoke_out"
     ;;
   false)
     log "$HOLDER_ADDR's trustline is already deauthorized (a prior run of this script got this far); not revoking again"
-    REVOKE_TX_HASH=""
+    REVOKE_TX_HASH="$(find_revoke_tx_hash "$DEMO_ISSUER_ADDR" "$HOLDER_ADDR" "$DEMO_CODE")"
+    log "found the real revoke transaction from a prior run: $REVOKE_TX_HASH"
     ;;
   *)
     die "$HOLDER_ADDR's $DEMO_CODE trustline authorization read as an unexpected value: $already_authorized"
@@ -336,9 +401,9 @@ log "real clawback amount, from Horizon's own effects: $CLAWBACK_AMOUNT_DECIMAL 
 # including its integer division, against the CURRENT canonical
 # IssuerFreeze definition and the REAL supply at posting time.
 
-CANONICAL_VERSION="$("$STELLAR_BIN" contract invoke --id "$ER_ID" --source-account sylox-testnet-admin --network testnet --send=no -- current_version --asset "$DEMO_ID" --kind '"IssuerFreeze"' 2>&1)"
+CANONICAL_VERSION="$(invoke_read "current_version(DEMOUSD, IssuerFreeze)" --id "$ER_ID" --source-account sylox-testnet-admin --network testnet --send=no -- current_version --asset "$DEMO_ID" --kind '"IssuerFreeze"')"
 [[ "$CANONICAL_VERSION" =~ ^[1-9][0-9]*$ ]] || die "current_version(DEMOUSD, IssuerFreeze) is not registered ($CANONICAL_VERSION); run deploy/demo-asset.sh testnet first"
-def_json="$("$STELLAR_BIN" contract invoke --id "$ER_ID" --source-account sylox-testnet-admin --network testnet --send=no -- definition --asset "$DEMO_ID" --kind '"IssuerFreeze"' --version "$CANONICAL_VERSION" 2>&1)"
+def_json="$(invoke_read "definition(DEMOUSD, IssuerFreeze, v$CANONICAL_VERSION)" --id "$ER_ID" --source-account sylox-testnet-admin --network testnet --send=no -- definition --asset "$DEMO_ID" --kind '"IssuerFreeze"' --version "$CANONICAL_VERSION")"
 FREEZE_PCT_BPS="$(echo "$def_json" | jq -r '.freeze_pct_bps')"
 
 supply_at_trigger="$(read_real_supply)"
