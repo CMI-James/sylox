@@ -2,14 +2,15 @@
   "network": "testnet",
   "passphrase": "Test SDF Network ; September 2015",
   "rpc_url": "https://soroban-testnet.stellar.org",
-  "deployed_at": "2026-10-10T13:53:03Z",
-  "git_commit": "b0984cd0b8d44a39886e2fd5c9519510cbcdaf3f",
+  "deployed_at": "2026-10-11T15:00:08Z",
+  "git_commit": "9dbeba77420fd3656e06cdb2dd233b89abdb52e6",
   "stellar_cli_version": "28.1.0",
+  "constructor_nonce": "sylox-v1",
   "contracts": {
-    "risk_oracle": { "id": "CD73S5ZPCPPPI2WSSUMGMEETM7YUSLDNQRHQEZNELB3NBHXJWYAGJEXE", "wasm_hash": "842d5408019a952b495128b1732cd0d77b1dbdedda1df01b018677aa00d5c60e", "wasm_size": 85000 },
-    "staking": { "id": "CC5ZSJHCIJYNDCVQFR72WPQLDJQ25FFXRKBJTU3AI6SH3RGDV4X6576G", "wasm_hash": "44da9f224d5247dcb2fc568d6d362cef8740ed580082298bbe154521a77c2110", "wasm_size": 44398 },
-    "treasury": { "id": "CD5AIXC6VYINJG25YTDY4ZNLWVGBGX5JBMXR5QPS7KGNS6JGN5HAXYBP", "wasm_hash": "272d8554be96dc62c0af5bfa246ec4dc2a495e26dd263889958f0c1cc34464a6", "wasm_size": 11229 },
-    "event_registry": { "id": "CA7CQNGU6X7DAJUN747KZHA3YDNO4GBLWVDU45BUBVKLEV7H3CVIP6EF", "wasm_hash": "20a0137653e9c7dd7dcd8eaf660663f18e6b2d412d92bedd2456a66c77a56b3f", "wasm_size": 45110 }
+    "risk_oracle": { "id": "CCENSA5ANAJAFBFOEB7AFVXYLNFORH55IKAPJLZL2W37G6S3QKHYQOON", "wasm_hash": "0f85f867b91b983db7cc5652c6389734b0a555fabb693c695ce77440ef507041", "wasm_size": 88275, "salt": "09ce54fca8df7896f83b043b639be3a72c3f4f5ba4516e78e6dac02b9ae37d58" },
+    "staking": { "id": "CA6G7IRRNBTUL55FBU4AL27JFI7C2RM37YQHGLXBV7O54Z2YZZGGZ5S5", "wasm_hash": "c532f2a172b4ed1915787619e35b679c5382c5fa3dfdadd65580febf17560b46", "wasm_size": 47405, "salt": "b022abd4a34b58b5be4c455501c7ed6d85234cf3e4ff76c1bfce8c47644a34fe" },
+    "treasury": { "id": "CBZSUKEWODFHKG5Z5ZPMCBON2LPJCIR46ZFN7HLIDTVQQS6DLDKLLTO4", "wasm_hash": "7f654b400e88d41f8ea6e39cc07a642fd20142cc833eba2c6c9ba0a12cdb76d9", "wasm_size": 14017, "salt": "35ec720f7cd8da028da64b18d5baa895898c9e405574e0e240ebcb1a43034e94" },
+    "event_registry": { "id": "CBKLNYRCZJXMKZUPZRFEZU4SALCOUGXF7MX766ZHVFRH5UN5WXLVDPGG", "wasm_hash": "dcf56fcf4f218f61dcd183ea31694493624b06c70479797e902f393e8c7c2070", "wasm_size": 47767, "salt": "8b6fea50aab8a1a4dcc735fe0dbd5ddfd00aeb836945546b0b5e4f05155c833c" }
   },
   "tusd": {
     "contract_id": "CAYG7PY2SRNVZDFKF5K65AUJTAD3LNSHGZWYVAZXPHNYYOF4MEMANXRU",
