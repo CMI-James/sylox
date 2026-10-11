@@ -172,16 +172,23 @@ read_trustline_authorized() {
 }
 
 # The jq half of find_revoke_tx_hash, factored out so it can be tested
-# against a small local JSON sample (deploy/test-demo-asset-trigger-
-# parse-i128.sh) without a real Horizon call. Takes Horizon's own
+# against small local JSON samples (deploy/test-demo-asset-trigger-
+# find-revoke.sh) without a real Horizon call. Takes Horizon's own
 # /accounts/{id}/operations response (already fetched) and returns the
 # most recent (the list is order=desc, so [0] is newest)
-# set_trust_line_flags operation's transaction_hash for this exact
-# trustor/asset_code pair, or empty if none matches.
+# set_trust_line_flags operation that actually cleared authorization
+# (clear_flags_s contains "authorized", confirmed against the real
+# revoke's own operation record) for this exact trustor/asset_code
+# pair, or empty if none matches. Checking clear_flags_s and not just
+# the operation type matters because set_trust_line_flags is also how
+# the OPPOSITE action (re-authorizing) would show up on-chain; this
+# script never calls that itself, but a future admin action or a
+# different script could, and the newest set_trust_line_flags
+# wouldn't then be the real revoke.
 select_revoke_tx_hash_from_ops() {
   local ops_json="$1" trustor="$2" asset_code="$3"
   echo "$ops_json" | jq -r --arg trustor "$trustor" --arg code "$asset_code" \
-    '[._embedded.records[] | select(.type == "set_trust_line_flags" and .trustor == $trustor and .asset_code == $code)][0].transaction_hash // empty'
+    '[._embedded.records[] | select(.type == "set_trust_line_flags" and .trustor == $trustor and .asset_code == $code and ((.clear_flags_s // []) | index("authorized")))][0].transaction_hash // empty'
 }
 
 # Finds the real transaction hash of `issuer`'s most recent
