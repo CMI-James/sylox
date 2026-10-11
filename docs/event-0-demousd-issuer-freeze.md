@@ -82,8 +82,19 @@ a longer retention window than this testnet RPC's own is available.
 
 ## DEMOUSD state at the time of recording
 
-- Holder's real DEMOUSD balance: `150.0000000` (100 minted, 50 clawed
-  back).
+- Holder's real DEMOUSD balance: `150.0000000`. Not 100 minted minus
+  50 clawed back: the real sequence was 100 + 100 - 50 = 150. An
+  earlier run's own "skip minting if already funded" guard never
+  actually worked (it matched `stellar contract invoke --send=no`'s
+  raw, double-quoted output against a bare `^[0-9]+$`, which never
+  matches a quoted value), so this holder was minted twice before the
+  one clawback. Fixed in `parse_i128()`
+  (`deploy/demo-asset-trigger.sh`), tested in
+  `deploy/test-demo-asset-trigger-parse-i128.sh`. This holder's own
+  trustline is now permanently deauthorized with this real 150
+  DEMOUSD balance still on it; it is retired, not reused - a reset
+  means a fresh holder identity (`sylox-demo-holder-2` going forward),
+  never a re-run against this one.
 - Real circulating supply at the time `propose_tier1` succeeded: read
   fresh from Horizon's asset-stats endpoint by `demo-asset-trigger.sh`
   itself at posting time (not re-derived here; see that script's own
