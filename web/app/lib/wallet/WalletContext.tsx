@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { WalletPickerModal, type WalletOption } from "@sylox/ui/components";
-import { getKit, ensureFreighterAccess } from "./kit";
+import { getKit, ensureFreighterAccess, restoreWalletSilently } from "./kit";
 
 export interface SignResult {
   signedTxXdr: string;
@@ -38,6 +38,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wallets, setWallets] = useState<WalletOption[]>([]);
+
+  useEffect(() => {
+    // Restores a previously-connected wallet across navigation and a
+    // page reload (bug: the wallet connection didn't survive either) -
+    // silent by design (see restoreWalletSilently's own doc comment):
+    // never opens the picker, never prompts Freighter, and any
+    // failure here just leaves the page showing "Connect wallet",
+    // exactly like a first visit.
+    let cancelled = false;
+    restoreWalletSilently()
+      .then((restored) => {
+        if (!cancelled && restored) setAddress(restored);
+      })
+      .catch(() => {
+        // Never surfaced to the UI - a failed silent restore is
+        // indistinguishable from "nothing to restore."
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openPicker = useCallback(() => {
     setError(null);

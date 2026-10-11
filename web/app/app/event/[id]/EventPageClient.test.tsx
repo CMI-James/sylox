@@ -223,6 +223,7 @@ describe("EventPageClient", () => {
         signTransaction: vi.fn(async () => ({ signedTxXdr: "fake-xdr" })),
       }),
       ensureFreighterAccess: vi.fn(async () => {}),
+      restoreWalletSilently: vi.fn(async () => null),
     }));
     vi.doMock("@/lib/event-actions", async () => {
       const actual = await vi.importActual<typeof import("@/lib/event-actions")>("@/lib/event-actions");

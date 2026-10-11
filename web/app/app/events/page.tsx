@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Eyebrow, Card } from "@sylox/ui/components";
 import { TestnetBanner } from "@/components/TestnetBanner";
 import { DashboardShell } from "@/components/DashboardShell";
@@ -153,7 +154,7 @@ function EventRows({ rows, className }: { rows: EventListRow[]; className?: stri
       {rows.map((row) => {
         const countdown = formatCountdown(row.windowClosesAt);
         return (
-          <Card key={row.id.toString()} href={`/event/${row.id}`} className="flex items-center justify-between gap-4">
+          <Card key={row.id.toString()} href={`/event/${row.id}`} as={Link} className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <p className="truncate font-display text-lg text-silo-oatmeal">{row.assetCode}</p>
               <p className="font-mono text-xs text-cyber-tin">{row.kind}</p>
