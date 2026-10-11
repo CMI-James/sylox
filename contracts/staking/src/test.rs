@@ -1755,3 +1755,96 @@ fn missing_oracle_auth_traps_natively_rather_than_returning_unknown_caller() {
     client.slash(&who, &1_000, &None, &BytesN::from_array(&env, &[0u8; 32]));
     let _ = asset;
 }
+
+// -- Issue #12: upgrade / migrate / version --
+
+#[test]
+fn version_reads_contract_version_constant() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    assert_eq!(fixture.client.version(), crate::CONTRACT_VERSION);
+}
+
+/// Non-governor cannot upgrade: same native auth trap as
+/// `missing_oracle_auth_traps_natively_rather_than_returning_unknown_caller`
+/// above, demonstrated directly with no auth mocking at all.
+#[test]
+#[should_panic]
+fn upgrade_without_governor_auth_traps() {
+    let env = Env::default();
+    // No mock_all_auths() of any kind: require_auth genuinely checks.
+    let governor = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let sac_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(sac_admin);
+    let contract_id = env.register(Staking, ());
+    let client = StakingClient::new(&env, &contract_id);
+    client.initialize(&governor, &oracle, &registry, &treasury, &sac.address());
+
+    let new_wasm_hash = env.upload(Staking);
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.upgrade(&new_wasm_hash);
+}
+
+/// Upgrading to new code (a fresh wasm hash, uploaded via `env.upload`
+/// per soroban-sdk's own documented pattern for exercising
+/// `update_current_contract` in a unit test without a compiled .wasm
+/// fixture) keeps all existing storage: a keeper added before the
+/// upgrade still reads back correctly through the same client and
+/// address after it.
+#[test]
+fn upgrade_keeps_existing_storage() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    let keeper = Address::generate(&env);
+    fixture.client.add_keeper(&keeper);
+    let keeper_info_before = fixture.client.keeper(&keeper);
+
+    let new_wasm_hash = env.upload(Staking);
+    fixture.client.upgrade(&new_wasm_hash);
+
+    assert_eq!(
+        fixture.client.keeper(&keeper),
+        keeper_info_before,
+        "keeper(keeper) must read the same after an upgrade with no storage-shape change"
+    );
+    assert_eq!(
+        fixture.client.version(),
+        crate::CONTRACT_VERSION,
+        "the re-uploaded code is the same crate, so its own version() constant is unchanged"
+    );
+}
+
+/// `migrate()` always targets this code's own `CONTRACT_VERSION` (no
+/// caller-chosen argument - see `migrate`'s own doc comment for why),
+/// and can't run twice.
+#[test]
+fn migrate_cannot_run_twice() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    fixture.client.migrate();
+    let result = fixture.client.try_migrate();
+    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
+}
+
+/// Non-governor cannot migrate: same native auth trap pattern as
+/// `upgrade_without_governor_auth_traps`.
+#[test]
+#[should_panic]
+fn migrate_without_governor_auth_traps() {
+    let env = Env::default();
+    let governor = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let sac_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(sac_admin);
+    let contract_id = env.register(Staking, ());
+    let client = StakingClient::new(&env, &contract_id);
+    client.initialize(&governor, &oracle, &registry, &treasury, &sac.address());
+
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.migrate();
+}

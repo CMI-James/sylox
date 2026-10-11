@@ -64,4 +64,9 @@ pub enum Error {
     /// fallback path, or a fallback post against an hour that already
     /// has a sub-epoch posted, both return this.
     HourAlreadyPosted = 115,
+    /// Issue #12: `migrate` called with a `target_version` already
+    /// applied (or an older one). Each storage-shape migration runs at
+    /// most once; a second call for the same (or an earlier) version is
+    /// a no-op request, not a retry of something that failed.
+    AlreadyMigrated = 116,
 }

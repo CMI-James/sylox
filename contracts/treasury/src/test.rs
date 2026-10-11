@@ -494,3 +494,90 @@ fn t1_a_direct_transfer_with_no_deposit_call_counts_as_a_donation_not_a_violatio
     assert_eq!(tracked, 0);
     assert_eq!(fx.usdc_client.balance(&fx.contract_id), 1_000_000);
 }
+
+// -- Issue #12: upgrade / migrate / version --
+
+#[test]
+fn version_reads_contract_version_constant() {
+    let env = Env::default();
+    let fx = setup(&env);
+    assert_eq!(fx.client.version(), crate::CONTRACT_VERSION);
+}
+
+/// Non-governor cannot upgrade: a native auth trap, demonstrated
+/// directly with no auth mocking at all.
+#[test]
+#[should_panic]
+fn upgrade_without_governor_auth_traps() {
+    let env = Env::default();
+    // No mock_all_auths() of any kind: require_auth genuinely checks.
+    let governor = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let sac_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(sac_admin);
+    let contract_id = env.register(Treasury, ());
+    let client = TreasuryClient::new(&env, &contract_id);
+    client.initialize(&governor, &staking, &sac.address());
+
+    let new_wasm_hash = env.upload(Treasury);
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.upgrade(&new_wasm_hash);
+}
+
+/// Upgrading to new code (a fresh wasm hash, uploaded via `env.upload`
+/// per soroban-sdk's own documented pattern for exercising
+/// `update_current_contract` in a unit test without a compiled .wasm
+/// fixture) keeps all existing storage: a deposited bucket balance
+/// still reads back correctly through the same client and address
+/// after it.
+#[test]
+fn upgrade_keeps_existing_storage() {
+    let env = Env::default();
+    let fx = setup(&env);
+    deposit_into(&env, &fx, TreasuryBucket::Fees, 500_000);
+    let balance_before = fx.client.balance(&TreasuryBucket::Fees);
+
+    let new_wasm_hash = env.upload(Treasury);
+    fx.client.upgrade(&new_wasm_hash);
+
+    assert_eq!(
+        fx.client.balance(&TreasuryBucket::Fees),
+        balance_before,
+        "balance(Fees) must read the same after an upgrade with no storage-shape change"
+    );
+    assert_eq!(
+        fx.client.version(),
+        crate::CONTRACT_VERSION,
+        "the re-uploaded code is the same crate, so its own version() constant is unchanged"
+    );
+}
+
+/// `migrate()` always targets this code's own `CONTRACT_VERSION` (no
+/// caller-chosen argument - see `migrate`'s own doc comment for why),
+/// and can't run twice.
+#[test]
+fn migrate_cannot_run_twice() {
+    let env = Env::default();
+    let fx = setup(&env);
+    fx.client.migrate();
+    let result = fx.client.try_migrate();
+    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
+}
+
+/// Non-governor cannot migrate: same native auth trap pattern as
+/// `upgrade_without_governor_auth_traps`.
+#[test]
+#[should_panic]
+fn migrate_without_governor_auth_traps() {
+    let env = Env::default();
+    let governor = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let sac_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(sac_admin);
+    let contract_id = env.register(Treasury, ());
+    let client = TreasuryClient::new(&env, &contract_id);
+    client.initialize(&governor, &staking, &sac.address());
+
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.migrate();
+}

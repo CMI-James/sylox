@@ -32,4 +32,9 @@ pub enum Error {
     /// `deposit`, `accrue_reward`, `allocate` or `spend` called with a
     /// non-positive amount.
     InvalidAmount = 703,
+    /// Issue #12: `migrate` called with a `target_version` already
+    /// applied (or an older one). Each storage-shape migration runs at
+    /// most once; a second call for the same (or an earlier) version is
+    /// a no-op request, not a retry of something that failed.
+    AlreadyMigrated = 704,
 }
