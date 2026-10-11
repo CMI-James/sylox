@@ -524,9 +524,16 @@ if [[ -n "$HOLDER_ADDR" ]]; then
   # the ONLY place that submits - dry-run and real mode share that
   # same branch, gated only by DRY_RUN inside it, the same shape every
   # other step in this script already uses.
+  # A failed Horizon lookup here must never read as "no trustline" -
+  # review finding: curl -sSf ... || account_json_step1="" treated a
+  # network failure exactly like a genuine "trustline does not exist
+  # yet" and would have submitted change-trust either way. die on a
+  # real lookup failure instead, the same pattern every other Horizon
+  # read in this script already uses - this was the one exception.
   HOLDER_TRUSTLINE_EXISTS=0
-  account_json_step1="$(curl -sSf "$HORIZON_URL/accounts/$HOLDER_ADDR" 2>&1)" || account_json_step1=""
-  if [[ -n "$account_json_step1" ]] && echo "$account_json_step1" | jq -e --arg code "$DEMO_CODE" --arg issuer "$DEMO_ISSUER_ADDR" \
+  account_json_step1="$(curl -sSf "$HORIZON_URL/accounts/$HOLDER_ADDR" 2>&1)" \
+    || die "could not read $HOLDER_ADDR's account from Horizon: $account_json_step1"
+  if echo "$account_json_step1" | jq -e --arg code "$DEMO_CODE" --arg issuer "$DEMO_ISSUER_ADDR" \
       '.balances[]? | select(.asset_code == $code and .asset_issuer == $issuer)' >/dev/null 2>&1; then
     HOLDER_TRUSTLINE_EXISTS=1
   fi
