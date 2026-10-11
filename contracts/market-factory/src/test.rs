@@ -127,17 +127,15 @@ enum RegistryKey {
 
 struct Fixture<'a> {
     client: MarketFactoryClient<'a>,
-    governor: Address,
+    contract_id: Address,
     oracle: MockRiskOracleClient<'a>,
     registry: MockEventRegistryClient<'a>,
-    treasury: Address,
     /// A real Stellar Asset Contract, admin `usdc_issuer` - so
     /// `SeriesTerms.settlement = usdc` genuinely passes the
     /// settlement-issuer check against any covered asset whose own
     /// issuer differs from `usdc_issuer` (true for every freshly
     /// generated test issuer).
     usdc: Address,
-    series_wasm: BytesN<32>,
 }
 
 fn setup(env: &Env) -> Fixture<'_> {
@@ -155,25 +153,25 @@ fn setup(env: &Env) -> Fixture<'_> {
         .address();
     let series_wasm = env.upload(DummySeries);
 
-    let contract_id = env.register(MarketFactory, ());
-    let client = MarketFactoryClient::new(env, &contract_id);
-    client.initialize(
-        &governor,
-        &oracle_id,
-        &registry_id,
-        &treasury,
-        &usdc,
-        &series_wasm,
+    let contract_id = env.register(
+        MarketFactory,
+        (
+            governor,
+            oracle_id,
+            registry_id,
+            treasury,
+            usdc.clone(),
+            series_wasm,
+        ),
     );
+    let client = MarketFactoryClient::new(env, &contract_id);
 
     Fixture {
         client,
-        governor,
+        contract_id,
         oracle,
         registry,
-        treasury,
         usdc,
-        series_wasm,
     }
 }
 
@@ -229,19 +227,65 @@ fn listed_asset(env: &Env, fx: &Fixture) -> (Address, Address) {
     (asset, issuer)
 }
 
+/// Issue #21: `initialize` is gone, replaced by `__constructor`, which
+/// Soroban runs atomically at deploy time - there is no longer a
+/// window where a contract address exists but is unconfigured, so
+/// there is nothing left for an `AlreadyInitialized`/`NotInitialized`
+/// pair of tests to prove on a freshly `register`-ed address (every
+/// `register` call makes a brand new address, already constructed by
+/// the time the call returns). The one honest thing left to
+/// demonstrate is `register_at`'s own testutils-only escape hatch,
+/// which re-runs a contract's constructor against an address that is
+/// already registered - not reproducible on-chain, where an address's
+/// executable and constructor are fixed at creation. Mirrors
+/// `staking`'s own `cannot_initialize_a_second_time` test.
 #[test]
-fn initialize_rejects_a_second_call() {
+fn cannot_initialize_a_second_time() {
     let env = Env::default();
     let fx = setup(&env);
-    let result = fx.client.try_initialize(
-        &fx.governor,
-        &Address::generate(&env),
-        &Address::generate(&env),
-        &fx.treasury,
-        &fx.usdc,
-        &fx.series_wasm,
+
+    // Something the first constructor never wrote, added after the
+    // fact through an ordinary call - a pure local read, since the
+    // re-registration below replaces `oracle` and a cross-call into
+    // it (e.g. via cover_cap) would now hit a nonexistent contract.
+    let asset = Address::generate(&env);
+    let list = Vec::from_array(&env, [Address::generate(&env)]);
+    fx.client.set_related_sellers(&asset, &list);
+
+    let new_governor = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+    let new_registry = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let new_usdc = Address::generate(&env);
+    let new_series_wasm = env.upload(MarketFactory);
+    env.register_at(
+        &fx.contract_id,
+        MarketFactory,
+        (
+            new_governor.clone(),
+            new_oracle.clone(),
+            new_registry.clone(),
+            new_treasury.clone(),
+            new_usdc.clone(),
+            new_series_wasm,
+        ),
     );
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
+
+    // The config half: reading storage directly (crate-private, but
+    // this test is a child module of the crate root) proves the
+    // second constructor's values are what is actually stored now.
+    let stored_config = env.as_contract(&fx.contract_id, || {
+        crate::storage::get_config(&env).unwrap()
+    });
+    assert_eq!(stored_config.governor, new_governor);
+    assert_eq!(stored_config.oracle, new_oracle);
+    assert_eq!(stored_config.registry, new_registry);
+    assert_eq!(stored_config.treasury, new_treasury);
+    assert_eq!(stored_config.usdc, new_usdc);
+
+    // The unrelated-storage half: the related-seller list set before
+    // re-registration is untouched by it.
+    assert_eq!(fx.client.related_sellers(&asset), Some(list));
 }
 
 #[test]
@@ -273,16 +317,11 @@ fn upgrade_without_governor_auth_traps() {
     let sac_admin = Address::generate(&env);
     let usdc = env.register_stellar_asset_contract_v2(sac_admin).address();
     let series_wasm = env.upload(DummySeries);
-    let contract_id = env.register(MarketFactory, ());
-    let client = MarketFactoryClient::new(&env, &contract_id);
-    client.initialize(
-        &governor,
-        &oracle,
-        &registry,
-        &treasury,
-        &usdc,
-        &series_wasm,
+    let contract_id = env.register(
+        MarketFactory,
+        (governor, oracle, registry, treasury, usdc, series_wasm),
     );
+    let client = MarketFactoryClient::new(&env, &contract_id);
 
     let new_wasm_hash = env.upload(MarketFactory);
     client.upgrade(&new_wasm_hash);
@@ -300,16 +339,18 @@ fn open_series_without_governor_auth_traps() {
     let sac_admin = Address::generate(&env);
     let usdc = env.register_stellar_asset_contract_v2(sac_admin).address();
     let series_wasm = env.upload(DummySeries);
-    let contract_id = env.register(MarketFactory, ());
-    let client = MarketFactoryClient::new(&env, &contract_id);
-    client.initialize(
-        &governor,
-        &oracle_id,
-        &registry_id,
-        &treasury,
-        &usdc,
-        &series_wasm,
+    let contract_id = env.register(
+        MarketFactory,
+        (
+            governor,
+            oracle_id,
+            registry_id,
+            treasury,
+            usdc.clone(),
+            series_wasm,
+        ),
     );
+    let client = MarketFactoryClient::new(&env, &contract_id);
 
     let asset = Address::generate(&env);
     let issuer = Address::generate(&env);
@@ -555,16 +596,11 @@ fn set_series_wasm_without_governor_auth_traps() {
     let sac_admin = Address::generate(&env);
     let usdc = env.register_stellar_asset_contract_v2(sac_admin).address();
     let series_wasm = env.upload(DummySeries);
-    let contract_id = env.register(MarketFactory, ());
-    let client = MarketFactoryClient::new(&env, &contract_id);
-    client.initialize(
-        &fx_governor,
-        &oracle,
-        &registry,
-        &treasury,
-        &usdc,
-        &series_wasm,
+    let contract_id = env.register(
+        MarketFactory,
+        (fx_governor, oracle, registry, treasury, usdc, series_wasm),
     );
+    let client = MarketFactoryClient::new(&env, &contract_id);
 
     let new_hash = BytesN::from_array(&env, &[9u8; 32]);
     client.set_series_wasm(&new_hash);

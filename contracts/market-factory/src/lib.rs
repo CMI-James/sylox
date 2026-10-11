@@ -63,7 +63,14 @@ const MIGRATED_TO_KEY: Symbol = symbol_short!("MIGRATE");
 
 #[contractimpl]
 impl MarketFactory {
-    pub fn initialize(
+    /// Issue #21, #66: a constructor, not a separate `initialize`
+    /// call - see `RiskOracle::__constructor`'s own doc comment for
+    /// why (the two-step "deploy, then invoke initialize" flow leaves
+    /// a real front-runnable window; a constructor runs atomically
+    /// with deployment, so there is none). Only stores addresses and
+    /// config; never calls another contract, the same rule the four
+    /// core contracts' own constructors follow.
+    pub fn __constructor(
         env: Env,
         governor: Address,
         oracle: Address,
@@ -71,10 +78,7 @@ impl MarketFactory {
         treasury: Address,
         usdc: Address,
         series_wasm: BytesN<32>,
-    ) -> Result<(), Error> {
-        if storage::get_config(&env).is_some() {
-            return Err(Error::AlreadyInitialized);
-        }
+    ) {
         storage::set_config(
             &env,
             &Config {
@@ -86,7 +90,6 @@ impl MarketFactory {
                 series_wasm,
             },
         );
-        Ok(())
     }
 
     /// Issue #12. The currently deployed code's own version, bumped by
