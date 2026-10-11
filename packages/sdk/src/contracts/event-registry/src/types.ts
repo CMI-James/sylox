@@ -137,7 +137,14 @@ export const Error = {
    * different questions: one is about a DEFINITION, the other
    * about a specific PROPOSAL.
    */
-  215 : { message: "UnknownEvent" }
+  215 : { message: "UnknownEvent" },
+  /**
+   * Issue #12: `migrate` called with a `target_version` already
+   * applied (or an older one). Each storage-shape migration runs at
+   * most once; a second call for the same (or an earlier) version is
+   * a no-op request, not a retry of something that failed.
+   */
+  216 : { message: "AlreadyMigrated" }
 }
 
 /**
@@ -492,5 +499,20 @@ export interface EventDefinition {
    * (event_id, def_version, window_start, declared_at).
    */
   { tag: "Declared"; values: readonly [bigint, number, bigint, bigint] };
-    export type ContractEvent = EventCuredEvent | EventDeclaredEvent | EventProposedEvent | EventRejectedEvent | EventEscalatedEvent | RulingTimedOutEvent | EventChallengedEvent | DefinitionRegisteredEvent;
+
+/**
+ * technical-doc.md Section 17.3. `contract` is `env.current_contract_
+ * address()`, so an indexer watching this topic across every Sylox
+ * contract can tell which one just upgraded without decoding the event's
+ * own emitting address separately.
+ */
+export interface UpgradedEvent {
+  name: "Upgraded";
+  data: {
+    contract: string;
+    old_version?: number;
+    new_wasm_hash?: Uint8Array;
+  };
+}
+    export type ContractEvent = EventCuredEvent | EventDeclaredEvent | EventProposedEvent | EventRejectedEvent | EventEscalatedEvent | RulingTimedOutEvent | EventChallengedEvent | DefinitionRegisteredEvent | UpgradedEvent;
     

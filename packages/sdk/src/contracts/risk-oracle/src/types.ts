@@ -74,7 +74,14 @@ export const Error = {
    * fallback path, or a fallback post against an hour that already
    * has a sub-epoch posted, both return this.
    */
-  115 : { message: "HourAlreadyPosted" }
+  115 : { message: "HourAlreadyPosted" },
+  /**
+   * Issue #12: `migrate` called with a `target_version` already
+   * applied (or an older one). Each storage-shape migration runs at
+   * most once; a second call for the same (or an earlier) version is
+   * a no-op request, not a retry of something that failed.
+   */
+  116 : { message: "AlreadyMigrated" }
 }
 
 /**
@@ -571,5 +578,20 @@ export interface SubEpochConfig {
   pending_sub_epoch_secs: bigint | null;
   sub_epoch_secs: bigint;
 }
-    export type ContractEvent = HourBuiltEvent | AssetStaleEvent | BandChangedEvent | ScoreUpdatedEvent | SignalsFinalEvent | SignalsPostedEvent | SignalsDisputedEvent | SignalsResolvedEvent | SubSignalsFinalEvent | SubSignalsPostedEvent | EndpointFinalizedEvent | SubSignalsDisputedEvent | SubSignalsResolvedEvent | SubEpochSecsChangedEvent | SignalDisputeTimedOutEvent | SubSignalDisputeTimedOutEvent;
+
+/**
+ * technical-doc.md Section 17.3. `contract` is `env.current_contract_
+ * address()`, so an indexer watching this topic across every Sylox
+ * contract can tell which one just upgraded without decoding the event's
+ * own emitting address separately.
+ */
+export interface UpgradedEvent {
+  name: "Upgraded";
+  data: {
+    contract: string;
+    old_version?: number;
+    new_wasm_hash?: Uint8Array;
+  };
+}
+    export type ContractEvent = HourBuiltEvent | AssetStaleEvent | BandChangedEvent | ScoreUpdatedEvent | SignalsFinalEvent | SignalsPostedEvent | SignalsDisputedEvent | SignalsResolvedEvent | SubSignalsFinalEvent | SubSignalsPostedEvent | EndpointFinalizedEvent | SubSignalsDisputedEvent | SubSignalsResolvedEvent | SubEpochSecsChangedEvent | SignalDisputeTimedOutEvent | SubSignalDisputeTimedOutEvent | UpgradedEvent;
     
