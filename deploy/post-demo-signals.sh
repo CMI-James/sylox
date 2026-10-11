@@ -228,16 +228,76 @@ post_sub_epochs() {
   log "epoch $epoch posted via the sub-epoch path ($posted/$SUBS_PER_HOUR sub-epochs posted, $skipped_stale skipped as individually stale, at ${SUB_EPOCH_SECS}s)"
 }
 
+# Review finding (this session): a transient RPC-level failure (a
+# timeout, a dropped connection, or a sequence-number clash from the
+# Railway cron poster and a local stopgap loop briefly racing the same
+# keeper account - expected and harmless per deploy/README.md's own
+# "shared keeper account" note) is not the same kind of failure as a
+# real rejection (a malformed signal, a contract-level error that
+# isn't #103/#115). The former is worth one retry, since the next
+# attempt often just succeeds; the latter never will on a retry and
+# should fail the same sub-epoch (and this run) immediately, same as
+# before.
+#
+# Narrow on purpose, matching only strings actually observed from this
+# exact stellar-cli version, each noted below with where it was seen -
+# a bare "client error" or "timeout" substring is too wide (it would
+# also match inside a real rejection's own error text in some other,
+# not-yet-seen case) and the old version matched on that wider basis;
+# narrowed here to the specific messages, not the general shape.
+#
+#   "transaction submission timeout"     - deploy/demo-asset-trigger.sh,
+#                                           posting the triggering signal
+#                                           for DEMOUSD (this session).
+#   "error reading a body from connection" - the local --live stopgap
+#                                           loop, posting USDC sub-epochs
+#                                           (this session).
+#   "client error (SendRequest)"         - the local --live stopgap
+#                                           loop, same run as above.
+#   "client error (Connect)"             - the local --live stopgap
+#                                           loop, a separate occurrence.
+#   "txBadSeq"                            - not yet observed in this
+#                                           project directly, but the
+#                                           standard Stellar transaction
+#                                           result code for exactly the
+#                                           sequence-number clash the
+#                                           engineer's own review
+#                                           anticipated (two posters on
+#                                           one keeper account).
+#
+# Hard guard, checked FIRST and unconditionally: an actual contract
+# error ("Error(Contract," - the SAME prefix is_already_posted_error
+# already matches against #103/#115) is NEVER transient, regardless
+# of whatever else its own text happens to contain - a contract
+# rejection is a real, deterministic answer from the chain, not a
+# network hiccup, and retrying it only wastes a round trip before
+# failing the same way again.
+is_transient_error() {
+  [[ "$1" == *"Error(Contract,"* ]] && return 1
+  [[ "$1" == *"transaction submission timeout"* \
+     || "$1" == *"error reading a body from connection"* \
+     || "$1" == *"client error (SendRequest)"* \
+     || "$1" == *"client error (Connect)"* \
+     || "$1" == *"txBadSeq"* ]]
+}
+
 # Posts ONE sub-epoch (hour, sub) for live mode. Unlike post_sub_epochs
 # (the backfill helper above, which posts a whole hour's worth and
 # treats ANY failure as fatal), this posts a single sub-epoch and
 # treats "already posted" (Error #103/#115) as an ordinary, silent-to-
 # the-caller skip: live mode calls this once per closed sub-epoch in
 # its own two-hour lookback, and most of those, on most 5-minute ticks,
-# will already be posted. Echoes one of "posted"/"skipped"/"error" via
-# its own return code (0/0/1) and stdout, rather than logging here
-# directly, so the caller can keep one tally across many calls instead
-# of one log line per sub-epoch.
+# will already be posted. A transient failure (see is_transient_error
+# above) gets ONE retry; if that retry also fails, the sub-epoch is
+# reported as "deferred" (there is always a later tick, since --live
+# always re-checks the current and previous hour) rather than aborting
+# the whole run - a single flaky sub-epoch should never block every
+# other one already queued up behind it in the same pass. Any other
+# error (a real rejection, not transient) is NOT retried and still
+# fails the run immediately, same as before this change. Echoes one of
+# "posted"/"skipped"/"deferred"/"error" via its own return code (0/0/0/1)
+# and stdout, rather than logging here directly, so the caller can keep
+# one tally across many calls instead of one log line per sub-epoch.
 post_one_sub_epoch() {
   local hour="$1" sub="$2" sub_epoch_secs="$3"
 
@@ -248,14 +308,31 @@ post_one_sub_epoch() {
   inputs_hash="$(printf '%s' "live:$hour:$sub:$peg_ratio" | sha256sum | cut -d' ' -f1)"
   local signal_set="{\"epoch\":$hour,\"posted_at\":0,\"peg_ratio\":\"$peg_ratio\",\"peg_ratio_p10\":\"$peg_ratio_p10\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$SUPPLY\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
 
-  local out
-  if out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
-    post_sub_signals --keeper "$KEEPER_ADDR" --asset "$ASSET_ID" --hour "$hour" --sub "$sub" --s "$signal_set" 2>&1)"; then
-    echo "posted"
-    return 0
-  fi
-  if is_already_posted_error "$out"; then
-    echo "skipped"
+  local out attempt
+  for attempt in 1 2; do
+    if out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
+      post_sub_signals --keeper "$KEEPER_ADDR" --asset "$ASSET_ID" --hour "$hour" --sub "$sub" --s "$signal_set" 2>&1)"; then
+      echo "posted"
+      return 0
+    fi
+    if is_already_posted_error "$out"; then
+      echo "skipped"
+      return 0
+    fi
+    if (( attempt == 1 )) && is_transient_error "$out"; then
+      # Review finding: a retry with NO pause on a timeout or a
+      # sequence-number clash usually just hits the same condition
+      # again (the RPC endpoint is still recovering, or the other
+      # poster's transaction hasn't settled yet) - a short pause gives
+      # the actual cause a real chance to clear before trying again.
+      sleep 3
+      continue
+    fi
+    break
+  done
+
+  if is_transient_error "$out"; then
+    echo "deferred"
     return 0
   fi
   echo "error: $out"
@@ -295,8 +372,8 @@ run_live_mode() {
     fi
   }
 
-  local posted=0 skipped=0
-  local posted_list="" skipped_list=""
+  local posted=0 skipped=0 deferred=0
+  local posted_list="" skipped_list="" deferred_list=""
 
   local hour
   for hour in $(( hour_now - 1 )) "$hour_now"; do
@@ -323,6 +400,17 @@ run_live_mode() {
           skipped=$(( skipped + 1 ))
           skipped_list+="$hour.$sub "
           ;;
+        deferred)
+          # A transient failure survived one retry. Not fatal: --live
+          # re-checks this same (hour, sub) on every future tick until
+          # it is either posted or ages past its own 2h backfill
+          # window (post_sub_signals's own check_sub_epoch_window),
+          # same as any other not-yet-posted sub-epoch. Logged in the
+          # summary below so a pattern of repeated deferrals is
+          # visible, rather than silently retried forever.
+          deferred=$(( deferred + 1 ))
+          deferred_list+="$hour.$sub "
+          ;;
         *)
           echo "FATAL: hour $hour sub $sub: $result" >&2
           exit 1
@@ -331,7 +419,21 @@ run_live_mode() {
     done
   done
 
-  log "live: posted $posted sub-epoch(s) [${posted_list% }], skipped $skipped already-posted [${skipped_list% }]"
+  log "live: posted $posted sub-epoch(s) [${posted_list% }], skipped $skipped already-posted [${skipped_list% }], deferred $deferred [${deferred_list% }]"
+
+  # Review finding: a pass that posts NOTHING new but defers at least
+  # one sub-epoch is a different situation from a quiet, healthy pass
+  # (nothing to do but skips) or a pass that posted normally - it means
+  # every attempt this run made hit a transient failure that survived
+  # its own retry too. Exiting 1 here makes a sustained RPC outage show
+  # up as a crashed run on Railway, instead of hiding behind a clean-
+  # looking "deferred N" line in an otherwise-successful-exit-code log.
+  # A run with only skips (posted == 0, deferred == 0: nothing NEW to
+  # post at all) still exits 0 - that is the normal, expected case on
+  # most 5-minute ticks.
+  if (( posted == 0 && deferred > 0 )); then
+    exit 1
+  fi
 }
 
 if (( LIVE_MODE )); then

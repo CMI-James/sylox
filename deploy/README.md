@@ -90,6 +90,23 @@ S4) — and treats a sub-epoch that is already posted as a normal,
 expected skip, not a failure, since most 5-minute ticks between a
 sub-epoch's own close times will hit exactly that.
 
+**One retry on a transient failure, then deferred, not fatal.** A
+timeout, a dropped connection (`client error`, `error reading a body
+from connection`), or a sequence-number clash (`txBadSeq` - expected
+when the Railway cron poster and a local stopgap loop briefly race
+the same keeper account, see "Shared keeper account" below) gets
+exactly one immediate retry. If that retry also fails, the sub-epoch
+is counted as `deferred` in the pass's own summary line and the run
+moves on to the next sub-epoch, rather than exiting non-zero over it -
+a single flaky sub-epoch should never block every other one already
+queued up behind it in the same pass, and `--live` re-checks a
+deferred sub-epoch again on its own next scheduled tick regardless,
+same as any other not-yet-posted one. A real rejection (anything that
+is not one of those transient patterns, and not `Error #103`/`#115`
+already-posted) is never retried and still exits the run immediately,
+same as before this existed - this is deliberately narrow, not a
+general "ignore errors" switch.
+
 Do not run `--live` at the same time as a backfill (`post-demo-
 signals.sh testnet <epochs>`) or `smoke-testnet.sh`'s own write check
 against the same asset: both can post against the same hour `--live`
@@ -217,6 +234,18 @@ anything):
    testnet.json` - a wrong secret fails loudly before it can post as
    the wrong identity, never silently.
 
+   **Railway's cron service reuses the container filesystem between
+   scheduled runs** - confirmed in production, not an assumption: the
+   second of the first two scheduled runs failed with "An identity
+   with the name 'sylox-testnet-keeper' already exists", because
+   `~/.config/stellar` from the first run was still there on the
+   second. This is NOT the same as a one-off local `docker run`,
+   which always starts from a genuinely fresh filesystem. The
+   entrypoint's own `stellar keys add ... --overwrite` is what makes
+   re-importing the same identity on a reused filesystem succeed
+   instead of failing - do not remove `--overwrite`, even though a
+   fresh filesystem would never need it.
+
    **Never run a command that prints variable VALUES on this service**
    (plain `railway variables --service sylox-live-poster`, or `--kv`
    on its own, both print `SYLOX_KEEPER_SECRET`'s real value). This
@@ -246,7 +275,12 @@ Railway cron service is actually posting successfully before stopping
 a local stopgap loop, not the other way around.
 
 **"Done" for the initial rollout:** two consecutive scheduled runs
-each logging their own `live: posted N ... skipped M` summary line
-with no errors other than the expected `Error #103`/`#115` (already-
-posted) skips, followed by one `live(asset)` read showing a sub-epoch
-from within the last 10 minutes.
+each logging their own `live: posted N ... skipped M ... deferred K`
+summary line with no errors other than the expected `Error #103`/
+`#115` (already-posted) skips (confirmed in production, including
+through the `--overwrite` fix for the filesystem-reuse bug above),
+followed by one `live(asset)` read showing a sub-epoch from within
+the last 10 minutes. Met. Ongoing operation just needs an occasional
+spot check (a `live(asset)` read, or a glance at `railway logs`) that
+the service hasn't gone quiet, not this same close scrutiny every
+time.
