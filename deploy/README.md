@@ -284,3 +284,79 @@ the last 10 minutes. Met. Ongoing operation just needs an occasional
 spot check (a `live(asset)` read, or a glance at `railway logs`) that
 the service hasn't gone quiet, not this same close scrutiny every
 time.
+
+## `deploy/extend-ttl.sh`: a TTL stopgap for issue #28
+
+**This is a stopgap, not the real fix.** None of RiskOracle,
+EventRegistry, Treasury or Staking ever call `extend_ttl` on their own
+current-state storage, so every persistent/instance entry they write
+quietly ages toward expiry with nothing refreshing it. Measuring every
+tracked entry's `liveUntilLedgerSeq` (issue #28) showed the earliest
+expiring about 6 days out, too soon to wait for the real fix (extend
+TTL on write, per #28's own policy) to ship through `upgrade()`
+(#12). **Remove this script and its call site in
+`deploy/post-demo-signals.sh` once `upgrade()` ships that fix** - this
+script's whole job disappears the moment the contracts extend their
+own TTL on write.
+
+`deploy/extend-ttl.sh testnet` runs at the end of every
+`post-demo-signals.sh testnet --live` pass (every 5 minutes), after
+posting. One `getLedgerEntries` call reads every tracked entry's
+current TTL; only entries with less than 14 days left are extended, to
+about 30 days, via `stellar contract extend`. Most runs extend
+nothing - TTL only needs refreshing roughly every couple of weeks per
+entry, not every 5 minutes.
+
+**Entry scope: current-state keys only.** Current-state keys (one
+entry per asset/id, never growing) are tracked; per-epoch, per-hour or
+per-dispute history keys (`Signals`, `Overturned`, `Dispute`,
+`SubSignals`, `SubOverturned`, `SubDispute`, `SubRepostUsed`,
+`HeldHour`, `HourPostedVia`, `CommitteeMisses`, `Accrued`) are not -
+enumerating every epoch or hour ever posted would make this script's
+own cost grow forever, instead of staying flat. A history key ages out
+on its own and is individually restorable later if something rare (a
+dispute, an audit) ever needs it again; that is an acceptable cost
+here, not a live-read outage. The margin backing that call is thin: a
+fresh history entry starts with about 7 days of TTL, and the longest a
+live call needs one is the 2h dispute window plus the 6 day ruling
+window (`SIGNAL_DISPUTE_RULING_SECS` = 518,400s) - about 22 hours of
+slack. This script does not widen that margin; only the real fix
+(extend on write, through `upgrade()`) can make it unnecessary.
+
+**Token balances: every one of our own contracts x every token, never
+a classic account's.** A SAC's `Balance(Address)` key is a real
+Soroban `ContractData` entry, with its own TTL, only when the holder
+is itself a contract; for a plain classic account (the keeper, the
+DEMOUSD holder), the SAC's `balance()` reads the classic trustline
+balance straight off the classic ledger instead - confirmed
+empirically while reviewing this script (`getLedgerEntries` and even
+`stellar contract restore` both report no such entry for the keeper's
+own TUSD or the DEMOUSD holder, while Horizon's own account balance
+shows the real, current, non-zero amount: nothing archived, nothing
+lost, just never a Soroban entry in the first place). This is exactly
+why Staking's own TUSD balance matters and the keeper's own TUSD
+balance doesn't: `stake()`'s own `usdc.transfer` moves the keeper's
+bond out of the keeper's classic account and into Staking's contract
+address, which is where it actually needs a TTL extended. The cross
+product (`CONTRACT_NAMES` from `testnet.json`'s own `.contracts`
+object x `TUSD`/`USDC`/`DEMOUSD`) is built the same way the contract
+instance/code tracking is, so a contract added later (protection
+markets) is covered automatically, not a hardcoded pairing. Most
+combinations don't exist (RiskOracle holds no tokens today) and are
+skipped quietly, the same as `Score(USDC)`.
+
+**Manual extra keys**, off by default: `SYLOX_EXTRA_TTL_KEYS`, a
+space-separated list of `contract_id:key_json:durability` triples,
+extends those alongside the standard set. For when a specific
+historical entry (e.g. a disputed `Signals(asset, epoch)` while its
+dispute is open) needs to survive past its own natural expiry, without
+widening this script's own standard scope. See the script's own header
+comment for the exact format.
+
+**Failure handling:** a TTL failure never blocks or masks posting.
+`post-demo-signals.sh` captures posting's own exit code first, then
+always runs `extend-ttl.sh` after, then combines the two: a failed TTL
+step still lets a successful posting pass stand, logs the TTL failure
+clearly, and the combined script exits 1 so Railway shows it as a
+crashed run (worth investigating, but never at the cost of a posting
+pass that already succeeded).
