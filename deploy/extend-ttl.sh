@@ -138,6 +138,17 @@ ledger_to_date() {
     || date -u -r "$(( $(date +%s) + remaining_secs ))" +%Y-%m-%dT%H:%M:%SZ
 }
 
+# Ledgers to days, one decimal place, for the skip log below - plain
+# days read far easier at a glance than a raw ledger count. Pure bash
+# integer arithmetic (tenths of a day), not `bc`: the live-poster image
+# (deploy/Dockerfile.live-poster) never installs it, and this script
+# has to run there for real.
+ledgers_to_days() {
+  local ledgers="$1"
+  local tenths=$(( ledgers * SECS_PER_LEDGER * 10 / 86400 ))
+  printf '%d.%d' "$(( tenths / 10 ))" "$(( tenths % 10 ))"
+}
+
 # PRE_EXTEND_EARLIEST_DATE is set right after the initial check (before
 # any extend attempt can fail) so die's own message always carries the
 # last KNOWN-GOOD earliest expiry, even if a later extend call fails -
@@ -450,6 +461,14 @@ extend_one() {
 checked=0
 extended=0
 extended_names=()
+# Every checked entry that wasn't extended, with its own days
+# remaining, logged below in one block - so a run's log always
+# accounts for all 27 (or however many) checked entries, not just the
+# ones it touched. Was the source of a real review question (#70):
+# without this, a skipped entry with plenty of TTL left (e.g. a token
+# balance the SAC itself just bumped on a transfer) looked
+# indistinguishable from an entry this script simply never saw.
+skipped_lines=()
 
 for (( i = 0; i < ${#TRACK_CONTRACT[@]}; i++ )); do
   key_xdr="${ALL_KEY_XDR[$i]}"
@@ -467,6 +486,8 @@ for (( i = 0; i < ${#TRACK_CONTRACT[@]}; i++ )); do
     fi
     extended=$(( extended + 1 ))
     extended_names+=("${TRACK_LABEL[$i]}")
+  else
+    skipped_lines+=("${TRACK_LABEL[$i]} ($(ledgers_to_days "$remaining")d left)")
   fi
 done
 
@@ -481,6 +502,8 @@ for (( j = 0; j < ${#TRACK_CODE_WASM_HASH[@]}; j++ )); do
     extend_one code "" "" "${TRACK_CODE_WASM_HASH[$j]}" "${TRACK_CODE_LABEL[$j]}"
     extended=$(( extended + 1 ))
     extended_names+=("${TRACK_CODE_LABEL[$j]}")
+  else
+    skipped_lines+=("${TRACK_CODE_LABEL[$j]} ($(ledgers_to_days "$remaining")d left)")
   fi
 done
 
@@ -502,3 +525,6 @@ fi
 earliest_date="$(ledger_to_date "$earliest_live_until")"
 names_joined="$(IFS=,; echo "${extended_names[*]:-}")"
 log "ttl: checked $checked, extended $extended [$names_joined], earliest now $earliest_date"
+
+skipped_joined="$(IFS=,; echo "${skipped_lines[*]:-}")"
+log "ttl: skipped $(( checked - extended )) [$skipped_joined]"

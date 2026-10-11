@@ -74,6 +74,13 @@ jobs:
           end=$(date +%s)
           echo "cargo test --workspace took $((end - start))s"
 
+  extend-ttl-ledgers-to-days-test:
+    name: deploy/extend-ttl.sh ledgers_to_days regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-extend-ttl-ledgers-to-days.sh
+
   build-contracts:
     name: stellar contract build (all contracts)
     runs-on: ubuntu-latest
@@ -207,7 +214,7 @@ jobs:
     # passed - a broken contract build or a failing Rust test on main
     # blocks this exactly like it blocks everything else.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk, extend-ttl-ledgers-to-days-test]
     # One deploy at a time, in order - a second push landing while the
     # first is still deploying queues behind it instead of racing it
     # (never cancel-in-progress: a deploy that's already uploading to
@@ -273,7 +280,7 @@ jobs:
     # Same convention as deploy-sylox-app: only a real push to main,
     # only once every existing check has passed.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk, extend-ttl-ledgers-to-days-test]
     # Its own concurrency group, separate from deploy-sylox-app: the
     # two services are independent, so one deploying should never
     # queue behind the other.
