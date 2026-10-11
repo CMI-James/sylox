@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c3f7b1df4bf5ac10d01a41e7f22b8e6dc90ee785da17d4a104993f64fd95a91c # shrinks to ops = [TransferPosition(2, 1), Deposit(1, 1308872368), Sync, BuyCover(1, 1364954525, 1339), DeclareAndTrigger, BuyCover(0, 182912212, 207), ClaimFor(1), Withdraw(2, 138548896), BuyCover(1, 150522093, 832), AdvanceTime(102219), Claim(1, 717723194), Claim(1, 37601408), Withdraw(1, 131867369), CancelQuote(0), Sync, Quote(0, 146, 1911822422), Quote(1, 124, 969258052), Claim(1, 863845665), Claim(0, 1316375229), Quote(1, 350, 346297970), Claim(0, 705137441), Sync, AdvanceTime(35792), DeclareAndTrigger, Deposit(1, 939755146), Sync, Withdraw(2, 924356086), ClaimFor(1), BuyCover(1, 624502862, 1084), Deposit(1, 1799942037)]
