@@ -287,7 +287,7 @@ fn open_real_series(env: &Env) -> (Fixture<'_>, SeriesClient<'_>, Address, Addre
     (fx, series, series_address, keeper, terms)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Op {
     Deposit(u8, i128),
     Quote(u8, u32, i128),
@@ -502,6 +502,256 @@ proptest! {
                     "I9 violated: open cover exceeds cover_cap"
                 );
             }
+        }
+    }
+}
+
+/// Permanent regression test (PR #67 review): the exact 29-op
+/// sequence proptest's own shrinker reduced the one-time, otherwise
+/// unreproduced `i1_i2_i3_i4_i5_i6_i9_i10_i11_i13_never_break` failure
+/// to, hand-written with no proptest and no seed. Shrinking only ever
+/// accepts a smaller candidate by re-running the test function
+/// against it and observing it fail, so this exact sequence did fail,
+/// more than once, inside the original process; this test asks
+/// whether it still does against a fresh, deterministic `Env` (each
+/// case already builds one from scratch, with no state shared across
+/// cases - `open_real_series` and everything above it is the only
+/// thing a case touches). Every invariant is checked after every
+/// single op, by index, with both sides of each comparison in the
+/// panic message, exactly like the property test above, just with
+/// plain `assert!`/`assert_eq!` in place of `prop_assert!`/
+/// `prop_assert_eq!` (unavailable outside a `proptest!` body) and a
+/// concrete op list in place of a generated one.
+#[test]
+fn shrunk_regression_from_the_one_time_unreproduced_core_property_failure() {
+    let env = Env::default();
+    let (fx, series, series_address, keeper, initial_terms) = open_real_series(&env);
+    let asset = initial_terms.asset.clone();
+
+    assert_eq!(
+        fx.registry.current_version(&asset, &EventKind::Depeg),
+        initial_terms.def_versions.get(EventKind::Depeg).unwrap()
+    );
+
+    let sellers: std::vec::Vec<Address> = (0..3).map(|_| Address::generate(&env)).collect();
+    let buyers: std::vec::Vec<Address> = (0..2).map(|_| Address::generate(&env)).collect();
+    for s in &sellers {
+        fx.usdc_admin_client.mint(s, &10_000_000_000);
+    }
+    for b in &buyers {
+        fx.usdc_admin_client.mint(b, &10_000_000_000);
+    }
+
+    let mut triggered_once = false;
+
+    // The exact shrunk sequence from
+    // contracts/series/proptest-regressions/test/property.txt,
+    // transcribed verbatim.
+    let ops = std::vec![
+        Op::TransferPosition(2, 1),
+        Op::Deposit(1, 1308872368),
+        Op::Sync,
+        Op::BuyCover(1, 1364954525, 1339),
+        Op::DeclareAndTrigger,
+        Op::BuyCover(0, 182912212, 207),
+        Op::ClaimFor(1),
+        Op::Withdraw(2, 138548896),
+        Op::BuyCover(1, 150522093, 832),
+        Op::AdvanceTime(102219),
+        Op::Claim(1, 717723194),
+        Op::Claim(1, 37601408),
+        Op::Withdraw(1, 131867369),
+        Op::CancelQuote(0),
+        Op::Sync,
+        Op::Quote(0, 146, 1911822422),
+        Op::Quote(1, 124, 969258052),
+        Op::Claim(1, 863845665),
+        Op::Claim(0, 1316375229),
+        Op::Quote(1, 350, 346297970),
+        Op::Claim(0, 705137441),
+        Op::Sync,
+        Op::AdvanceTime(35792),
+        Op::DeclareAndTrigger,
+        Op::Deposit(1, 939755146),
+        Op::Sync,
+        Op::Withdraw(2, 924356086),
+        Op::ClaimFor(1),
+        Op::BuyCover(1, 624502862, 1084),
+        Op::Deposit(1, 1799942037),
+    ];
+
+    for (i, operation) in ops.into_iter().enumerate() {
+        match operation {
+            Op::Deposit(idx, amount) => {
+                let seller = &sellers[idx as usize];
+                let _ = series.try_deposit(seller, &amount);
+            }
+            Op::Quote(idx, rate, available) => {
+                let seller = &sellers[idx as usize];
+                let _ = series.try_quote(seller, &rate, &available);
+            }
+            Op::CancelQuote(idx) => {
+                let seller = &sellers[idx as usize];
+                let _ = series.try_cancel_quote(seller);
+            }
+            Op::Withdraw(idx, amount) => {
+                let seller = &sellers[idx as usize];
+                let state_before = series.state();
+                let premium_before = series
+                    .position(seller)
+                    .map(|p| p.premium_earned)
+                    .unwrap_or(0);
+                let _ = series.try_withdraw(seller, &amount);
+                if matches!(state_before, SeriesState::Open | SeriesState::Closed) {
+                    let premium_after = series
+                        .position(seller)
+                        .map(|p| p.premium_earned)
+                        .unwrap_or(0);
+                    assert_eq!(
+                        premium_before, premium_after,
+                        "op {i} ({operation:?}): I6 violated: premium_earned moved from {premium_before} to {premium_after} during an Open/Closed withdraw"
+                    );
+                }
+            }
+            Op::BuyCover(idx, amount, max_rate) => {
+                let buyer = &buyers[idx as usize];
+                let state_before = series.state();
+                let balance_before = series.balance(buyer);
+                if let Ok(Ok((filled, _premium))) = series.try_buy_cover(buyer, &amount, &max_rate)
+                {
+                    assert_eq!(
+                        state_before,
+                        SeriesState::Open,
+                        "op {i} ({operation:?}): I4 violated: buy_cover minted outside Open, state was {state_before:?}"
+                    );
+                    assert_eq!(
+                        series.balance(buyer),
+                        balance_before + filled,
+                        "op {i} ({operation:?}): buyer balance did not increase by the filled amount"
+                    );
+                }
+            }
+            Op::TransferPosition(from_idx, to_idx) => {
+                let from = &sellers[from_idx as usize];
+                let to = &sellers[to_idx as usize];
+                let _ = series.try_transfer_position(from, to);
+            }
+            Op::Claim(idx, amount) => {
+                let buyer = &buyers[idx as usize];
+                let state_before = series.state();
+                if let Ok(Ok(paid)) = series.try_claim(buyer, &amount) {
+                    assert_eq!(
+                        state_before,
+                        SeriesState::Triggered,
+                        "op {i} ({operation:?}): I5 violated: claim paid outside Triggered, state was {state_before:?}"
+                    );
+                    assert!(
+                        paid >= 0,
+                        "op {i} ({operation:?}): claim returned a negative amount: {paid}"
+                    );
+                }
+            }
+            Op::ClaimFor(idx) => {
+                let buyer = &buyers[idx as usize];
+                let state_before = series.state();
+                if let Ok(Ok(paid)) = series.try_claim_for(buyer) {
+                    if paid > 0 {
+                        assert_eq!(
+                            state_before,
+                            SeriesState::Triggered,
+                            "op {i} ({operation:?}): I5 violated: claim_for paid {paid} outside Triggered, state was {state_before:?}"
+                        );
+                    }
+                }
+            }
+            Op::Sync => {
+                let _ = series.sync();
+            }
+            Op::AdvanceTime(secs) => {
+                let now = env.ledger().timestamp();
+                env.ledger().set_timestamp(now + secs as u64);
+            }
+            Op::DeclareAndTrigger => {
+                if !triggered_once && env.ledger().timestamp() <= initial_terms.expiry {
+                    triggered_once = true;
+                    let now_epoch = env.ledger().timestamp() / EPOCH_SECS;
+                    let window_start_epoch = now_epoch + 1;
+                    post_run(
+                        &env,
+                        &fx.oracle,
+                        &keeper,
+                        &asset,
+                        window_start_epoch,
+                        168,
+                        9_900_000,
+                    );
+                    post_run(
+                        &env,
+                        &fx.oracle,
+                        &keeper,
+                        &asset,
+                        window_start_epoch + 168,
+                        72,
+                        9_000_000,
+                    );
+                    let now = env.ledger().timestamp();
+                    env.ledger().set_timestamp(now + 7_200 + 1);
+                    let proposer = Address::generate(&env);
+                    if let Ok(Ok(id)) =
+                        fx.registry
+                            .try_propose_tier1(&proposer, &asset, &EventKind::Depeg, &1)
+                    {
+                        let after = now + 7_200 + 1 + 86_400 + 259_200 + 7_200 + 1;
+                        env.ledger().set_timestamp(after);
+                        let _ = fx.registry.try_finalize(&id);
+                        let _ = series.try_trigger();
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            series.terms(),
+            initial_terms,
+            "op {i} ({operation:?}): I11 violated: terms changed after construction"
+        );
+
+        let mut total_collateral = 0i128;
+        for s in &sellers {
+            if let Some(position) = series.position(s) {
+                assert!(
+                    position.cover_written <= position.collateral,
+                    "op {i} ({operation:?}): I2 violated: seller cover_written {} > collateral {}",
+                    position.cover_written,
+                    position.collateral
+                );
+                total_collateral += position.collateral;
+            }
+        }
+        let total_cover_units: i128 = buyers.iter().map(|b| series.balance(b)).sum();
+        assert!(
+            total_cover_units <= total_collateral,
+            "op {i} ({operation:?}): I1 violated: total cover units {} > sum of sellers' collateral {}",
+            total_cover_units,
+            total_collateral
+        );
+
+        let totals = series.totals();
+        let expected_balance = totals.total_collateral + totals.total_premium
+            - totals.total_paid
+            - totals.total_withdrawn;
+        let actual_balance = fx.usdc_client.balance(&series_address);
+        assert_eq!(
+            actual_balance, expected_balance,
+            "op {i} ({operation:?}): I3 violated: series balance {actual_balance} != expected {expected_balance} (totals: {totals:?})"
+        );
+
+        if let Ok(Ok(cap)) = fx.factory.try_cover_cap(&asset) {
+            let open_cover = fx.factory.open_cover(&asset);
+            assert!(
+                open_cover <= cap,
+                "op {i} ({operation:?}): I9 violated: open cover {open_cover} > cover_cap {cap}"
+            );
         }
     }
 }
