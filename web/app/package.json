@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bindings:generate": "node scripts/generate-bindings.mjs"
+    "bindings:generate": "node scripts/generate-bindings.mjs",
+    "smoke:write-path": "vitest run --config vitest.smoke.config.ts"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.7.1",
