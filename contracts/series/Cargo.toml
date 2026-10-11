@@ -15,6 +15,7 @@ sylox-types = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+price-guard-mock = { path = "../price-guard-mock" }
 
 [features]
 testutils = ["soroban-sdk/testutils"]

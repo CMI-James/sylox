@@ -8,7 +8,8 @@
 
 use soroban_sdk::{contractclient, Address, Env};
 use sylox_types::{
-    AssetEventStatus, Band, CoverGate, EventKind, SignalSet, SlotState, SubEpoch, SubEpochConfig,
+    AssetEventStatus, Band, CoverGate, EventKind, GuardStatus, SignalSet, SlotState, SubEpoch,
+    SubEpochConfig,
 };
 
 #[contractclient(name = "RiskOracleClient")]
@@ -55,16 +56,11 @@ pub trait MarketFactory {
 /// or `withdraw`. Deliberately not built on
 /// `contracts/adapters/{amm-soroswap,fx-reference}`'s existing stub
 /// signatures - a distinct concern (price/FX reads), not reused here.
+/// `GuardStatus` itself lives in `sylox_types`, shared with whatever
+/// contract implements `check` (for example `price-guard-mock`), so
+/// both sides of this call encode the same type.
 #[contractclient(name = "PriceGuardClient")]
 #[allow(dead_code)]
 pub trait PriceGuard {
     fn check(env: Env, asset: Address) -> GuardStatus;
-}
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GuardStatus {
-    Ok,
-    Paused,
-    Unavailable,
 }

@@ -600,8 +600,10 @@ fn buy_cover_rejects_feed_behind() {
 fn buy_cover_rejects_fast_signal_pause() {
     let env = Env::default();
     let fx = setup(&env);
-    let guard_id = env.register(MockPriceGuard, ());
-    MockPriceGuardClient::new(&env, &guard_id).set_status(&crate::clients::GuardStatus::Paused);
+    let guard_admin = Address::generate(&env);
+    let guard_id = env.register(price_guard_mock::PriceGuardMock, (guard_admin,));
+    price_guard_mock::PriceGuardMockClient::new(&env, &guard_id)
+        .set_status(&fx.asset, &sylox_types::GuardStatus::Paused);
     fx.factory.set_price_guard(&fx.asset, &Some(guard_id));
     let buyer = Address::generate(&env);
     let result = fx.client.try_buy_cover(&buyer, &1_000_000, &1_000);
@@ -823,22 +825,4 @@ fn sep41_transfer_approve_and_burn() {
     assert_eq!(fx.client.allowance(&buyer, &other), 0);
 
     assert_eq!(fx.client.decimals(), 7);
-}
-
-#[contract]
-struct MockPriceGuard;
-
-#[contractimpl]
-impl MockPriceGuard {
-    pub fn set_status(env: Env, status: crate::clients::GuardStatus) {
-        env.storage()
-            .instance()
-            .set(&soroban_sdk::symbol_short!("STATUS"), &status);
-    }
-    pub fn check(env: Env, _asset: Address) -> crate::clients::GuardStatus {
-        env.storage()
-            .instance()
-            .get(&soroban_sdk::symbol_short!("STATUS"))
-            .unwrap_or(crate::clients::GuardStatus::Ok)
-    }
 }

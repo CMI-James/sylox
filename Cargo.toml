@@ -9,6 +9,7 @@ members = [
     "contracts/market-factory",
     "contracts/series",
     "contracts/governor",
+    "contracts/price-guard-mock",
     "contracts/adapters/amm-soroswap",
     "contracts/adapters/fx-reference",
 ]

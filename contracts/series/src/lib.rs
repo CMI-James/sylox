@@ -35,16 +35,14 @@ mod storage;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 use sylox_types::{
-    AssetEventStatus, Band, CoverGate, EventKind, Quote, SellerPosition, SeriesState, SeriesTerms,
-    SeriesTotals, TreasuryBucket,
+    AssetEventStatus, Band, CoverGate, EventKind, GuardStatus, Quote, SellerPosition, SeriesState,
+    SeriesTerms, SeriesTotals, TreasuryBucket,
 };
 
 pub use error::Error;
 use storage::{AllowanceValue, Config};
 
-use clients::{
-    EventRegistryClient, GuardStatus, MarketFactoryClient, PriceGuardClient, RiskOracleClient,
-};
+use clients::{EventRegistryClient, MarketFactoryClient, PriceGuardClient, RiskOracleClient};
 
 /// Section 9.2: `sale_end = expiry - sale_cutoff_secs`.
 const SALE_CUTOFF_SECS: u64 = 3 * 86_400;
