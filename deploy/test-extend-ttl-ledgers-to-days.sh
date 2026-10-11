@@ -4,12 +4,6 @@
 # skip-reporting log line prints. Deliberately pure bash integer
 # arithmetic, not `bc`: deploy/Dockerfile.live-poster never installs
 # `bc`, and this script has to run there for real.
-#
-# Sources extend-ttl.sh itself (under NETWORK=testnet-test-only, a
-# value its own arg check rejects, so sourcing it for this one
-# function exits before any network call or side effect runs) rather
-# than keeping a second, hand-copied implementation that could drift
-# from the real one.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
