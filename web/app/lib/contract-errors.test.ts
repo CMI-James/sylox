@@ -110,7 +110,7 @@ describe("describeScoreError", () => {
 
 describe("describeCoverGateError", () => {
   it("maps NotInitialized (2) to a plain sentence", () => {
-    expect(describeCoverGateError(2)).toMatch(/oracle isn't ready/i);
+    expect(describeCoverGateError(2)).toMatch(/protocol isn't ready/i);
   });
 
   it("falls back to the generic message for an unmapped code", () => {

@@ -33,7 +33,7 @@ type ErrorCopyMap = Record<number, string>;
 // NotReady arm -> DataNotFinal. Nothing else is reachable from this
 // specific call - leave_active/declare never return Err in this build).
 const FINALIZE_ERRORS: ErrorCopyMap = {
-  2: "The oracle isn't ready yet. Try again in a moment.", // NotInitialized
+  2: "The protocol isn't ready yet. Try again in a moment.", // NotInitialized
   204: "The challenge window for this event is still open.",
   206: "This event has already moved past this step.",
   213: "This event's price data isn't fully settled yet. Try again once the pending hours finalize.",
@@ -48,7 +48,7 @@ const FINALIZE_ERRORS: ErrorCopyMap = {
 // correctly either way, since IssuerFreeze genuinely has no cure step
 // to check).
 const CHECKPOINT_CURE_ERRORS: ErrorCopyMap = {
-  2: "The oracle isn't ready yet. Try again in a moment.", // NotInitialized
+  2: "The protocol isn't ready yet. Try again in a moment.", // NotInitialized
   206: "This event has already moved past this step, or doesn't use a cure check.",
   215: "This event no longer exists.",
   200: "This event's rules (its definition) couldn't be found.",
@@ -63,7 +63,7 @@ const SCORE_ERRORS: ErrorCopyMap = {
 // EventRegistry.cover_gate's only reachable error (lib.rs's cover_gate():
 // require_config -> NotInitialized).
 const COVER_GATE_ERRORS: ErrorCopyMap = {
-  2: "The oracle isn't ready yet. Try again in a moment.", // NotInitialized
+  2: "The protocol isn't ready yet. Try again in a moment.", // NotInitialized
 };
 
 function fallbackMessage(code: number | null): string {
