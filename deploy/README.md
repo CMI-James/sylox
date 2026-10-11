@@ -323,19 +323,27 @@ window (`SIGNAL_DISPUTE_RULING_SECS` = 518,400s) - about 22 hours of
 slack. This script does not widen that margin; only the real fix
 (extend on write, through `upgrade()`) can make it unnecessary.
 
-**Token balances: only a contract's own balance is tracked, never a
-classic account's.** A SAC's `Balance(Address)` key is a real Soroban
-`ContractData` entry, with its own TTL, only when the holder is itself
-a contract (Treasury's own TUSD balance, tracked here); for a plain
-classic account (the keeper, the DEMOUSD holder), the SAC's `balance()`
-reads the classic trustline balance straight off the classic ledger
-instead - confirmed empirically while reviewing this script (`getLedgerEntries`
-and even `stellar contract restore` both report no such entry for the
-keeper's own TUSD or the DEMOUSD holder, while Horizon's own account
-balance shows the real, current, non-zero amount: nothing archived,
-nothing lost, just never a Soroban entry in the first place). Tracking
-a classic holder's own balance here would always report "not found",
-forever, not a transient gap - so this script doesn't.
+**Token balances: every one of our own contracts x every token, never
+a classic account's.** A SAC's `Balance(Address)` key is a real
+Soroban `ContractData` entry, with its own TTL, only when the holder
+is itself a contract; for a plain classic account (the keeper, the
+DEMOUSD holder), the SAC's `balance()` reads the classic trustline
+balance straight off the classic ledger instead - confirmed
+empirically while reviewing this script (`getLedgerEntries` and even
+`stellar contract restore` both report no such entry for the keeper's
+own TUSD or the DEMOUSD holder, while Horizon's own account balance
+shows the real, current, non-zero amount: nothing archived, nothing
+lost, just never a Soroban entry in the first place). This is exactly
+why Staking's own TUSD balance matters and the keeper's own TUSD
+balance doesn't: `stake()`'s own `usdc.transfer` moves the keeper's
+bond out of the keeper's classic account and into Staking's contract
+address, which is where it actually needs a TTL extended. The cross
+product (`CONTRACT_NAMES` from `testnet.json`'s own `.contracts`
+object x `TUSD`/`USDC`/`DEMOUSD`) is built the same way the contract
+instance/code tracking is, so a contract added later (protection
+markets) is covered automatically, not a hardcoded pairing. Most
+combinations don't exist (RiskOracle holds no tokens today) and are
+skipped quietly, the same as `Score(USDC)`.
 
 **Manual extra keys**, off by default: `SYLOX_EXTRA_TTL_KEYS`, a
 space-separated list of `contract_id:key_json:durability` triples,

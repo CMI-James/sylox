@@ -77,17 +77,41 @@ EXTEND_THRESHOLD_LEDGERS=$(( 14 * 24 * 3600 / SECS_PER_LEDGER ))   # 241,920: 14
 EXTEND_TARGET_LEDGERS=$(( 30 * 24 * 3600 / SECS_PER_LEDGER ))      # 518,400: 30 days.
 
 RO_ID="$(jq -r '.contracts.risk_oracle.id' "$RECORD")"
-RO_WASM_HASH="$(jq -r '.contracts.risk_oracle.wasm_hash' "$RECORD")"
 ER_ID="$(jq -r '.contracts.event_registry.id' "$RECORD")"
-ER_WASM_HASH="$(jq -r '.contracts.event_registry.wasm_hash' "$RECORD")"
 TR_ID="$(jq -r '.contracts.treasury.id' "$RECORD")"
-TR_WASM_HASH="$(jq -r '.contracts.treasury.wasm_hash' "$RECORD")"
 STK_ID="$(jq -r '.contracts.staking.id' "$RECORD")"
-STK_WASM_HASH="$(jq -r '.contracts.staking.wasm_hash' "$RECORD")"
 KEEPER_ADDR="$(jq -r '.identities.keeper' "$RECORD")"
 TUSD_ID="$(jq -r '.tusd.contract_id' "$RECORD")"
 USDC_ID="$(jq -r '.tracked_asset.contract_id' "$RECORD")"
 DEMO_ID="$(jq -r '.demo_asset.contract_id' "$DEMO_RECORD")"
+
+# Every one of our own contracts, by name and id/wasm_hash, straight
+# from testnet.json's own .contracts object - not a hardcoded list of
+# today's four, so a contract added later (protection markets) is
+# picked up automatically, for both the instance/code tracking below
+# and the contract x token Balance cross product (review follow-up:
+# the keeper's own bond sits in Staking's TUSD balance, not the
+# keeper's own classic account - see this file's own comment further
+# down for why a classic account never gets a Balance entry at all).
+mapfile -t CONTRACT_NAMES < <(jq -r '.contracts | keys[]' "$RECORD")
+declare -A CONTRACT_ID_BY_NAME=()
+declare -A CONTRACT_WASM_HASH_BY_NAME=()
+for name in "${CONTRACT_NAMES[@]}"; do
+  CONTRACT_ID_BY_NAME["$name"]="$(jq -r --arg n "$name" '.contracts[$n].id' "$RECORD")"
+  CONTRACT_WASM_HASH_BY_NAME["$name"]="$(jq -r --arg n "$name" '.contracts[$n].wasm_hash' "$RECORD")"
+done
+
+# Every token in the deployment, by name and id - also not hardcoded
+# beyond the 3 top-level JSON fields these two files actually use for
+# tokens today (.tusd, .tracked_asset, .demo_asset); unlike .contracts,
+# these aren't a uniform list to begin with, so there's nothing more
+# generic to enumerate here without inventing a shape the deployment
+# files don't have.
+declare -A TOKEN_ID_BY_NAME=(
+  [TUSD]="$TUSD_ID"
+  [USDC]="$USDC_ID"
+  [DEMOUSD]="$DEMO_ID"
+)
 
 log() { echo "==> $*"; }
 
@@ -163,18 +187,19 @@ track() {
 # -- Contract instances and code (persistent; a SAC token has no
 # separate code entry - contractExecutableStellarAsset, confirmed
 # against a real instance read, not contractExecutableWasm - so only
-# custom contracts get a wasm-hash entry below).
+# our own contracts get a wasm-hash entry below). Driven by
+# CONTRACT_NAMES, not a hardcoded list of today's four.
 
-track "$RO_ID" instance "RiskOracle instance" ""
-track "$ER_ID" instance "EventRegistry instance" ""
-track "$TR_ID" instance "Treasury instance (covers all 4 Bucket balances)" ""
-track "$STK_ID" instance "Staking instance" ""
-track "$TUSD_ID" instance "TUSD token instance" ""
-track "$USDC_ID" instance "USDC token instance" ""
-track "$DEMO_ID" instance "DEMOUSD token instance" ""
-
-TRACK_CODE_WASM_HASH=("$RO_WASM_HASH" "$ER_WASM_HASH" "$TR_WASM_HASH" "$STK_WASM_HASH")
-TRACK_CODE_LABEL=("RiskOracle code" "EventRegistry code" "Treasury code" "Staking code")
+TRACK_CODE_WASM_HASH=()
+TRACK_CODE_LABEL=()
+for name in "${CONTRACT_NAMES[@]}"; do
+  track "${CONTRACT_ID_BY_NAME[$name]}" instance "$name instance" ""
+  TRACK_CODE_WASM_HASH+=("${CONTRACT_WASM_HASH_BY_NAME[$name]}")
+  TRACK_CODE_LABEL+=("$name code")
+done
+for token_name in "${!TOKEN_ID_BY_NAME[@]}"; do
+  track "${TOKEN_ID_BY_NAME[$token_name]}" instance "$token_name token instance" ""
+done
 
 log "Discovering current-state entries from the contracts' own storage"
 
@@ -265,19 +290,31 @@ track "$STK_ID" persistent "Staking Keeper($KEEPER_ADDR)" "$key_json"
 # by the Treasury instance entry tracked above. No separate persistent
 # key to track here.
 
-# -- Token balances: Treasury's own TUSD balance. A SAC's Balance(Address)
-# key is a real Soroban ContractData entry, with its own TTL, ONLY when
-# the holder is itself a contract (Treasury); for a plain classic
-# account (the keeper, the DEMOUSD holder), the SAC's balance() reads
-# the classic trustline balance directly off the classic ledger
-# instead - confirmed empirically (getLedgerEntries and even `stellar
-# contract restore` both report no such entry for the keeper's own
-# TUSD or the DEMOUSD holder, while Horizon's own account balance
-# shows the real, current, non-zero amount) - so there is no
-# Soroban-side TTL for those to extend at all. Tracking them here
-# would always report "not found", forever, not a transient gap.
-key_json="$(vec_json "$(sym_json "Balance")" "$(addr_json "$TR_ID")")"
-track "$TUSD_ID" persistent "TUSD Balance(Treasury)" "$key_json"
+# -- Token balances: Balance(contract) for every one of OUR OWN
+# contracts x every token in the deployment - e.g. Staking's own TUSD
+# balance, which is where the keeper's bond actually sits (review
+# follow-up: stake()'s usdc.transfer moves it from the keeper's
+# classic account into Staking's own contract address). A SAC's
+# Balance(Address) key is a real Soroban ContractData entry, with its
+# own TTL, ONLY when the holder is itself a contract; for a plain
+# classic account (the keeper, the DEMOUSD holder), the SAC's
+# balance() reads the classic trustline balance directly off the
+# classic ledger instead - confirmed empirically (getLedgerEntries and
+# even `stellar contract restore` both report no such entry for the
+# keeper's own TUSD or the DEMOUSD holder, while Horizon's own account
+# balance shows the real, current, non-zero amount) - so there is no
+# Soroban-side TTL for a classic holder's balance to extend at all;
+# this cross product is contract x token ONLY, never contract x
+# classic account. Most combinations don't exist (RiskOracle holds no
+# tokens today) and are skipped quietly below, same as Score(USDC).
+for name in "${CONTRACT_NAMES[@]}"; do
+  contract_id="${CONTRACT_ID_BY_NAME[$name]}"
+  for token_name in "${!TOKEN_ID_BY_NAME[@]}"; do
+    token_id="${TOKEN_ID_BY_NAME[$token_name]}"
+    key_json="$(vec_json "$(sym_json "Balance")" "$(addr_json "$contract_id")")"
+    track "$token_id" persistent "$token_name Balance($name)" "$key_json"
+  done
+done
 
 # -- Manual extra keys (off by default): "contract_id:key_json:durability" triples.
 if [[ -n "${SYLOX_EXTRA_TTL_KEYS:-}" ]]; then
