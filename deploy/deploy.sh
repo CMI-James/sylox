@@ -35,6 +35,25 @@
 #       without touching it) — confirmed by reading
 #       contracts/event-registry/src/lib.rs before writing this
 #       script. `sylox-testnet-admin` is passed as a placeholder.
+#   D5. How EventRegistry gets the REAL MarketFactory address once
+#       MarketFactory exists: no governor-only setter added in THIS
+#       redeploy (that would be new, live, governor-gated surface area
+#       for a value nothing reads yet - same D4 confirmation,
+#       config.factory has zero real behavior depending on it today).
+#       Not a constant baked into migrate()'s own body either: WASM is
+#       shared across networks, so a hardcoded address would compile
+#       in the wrong one on mainnet, or force a separate build per
+#       network - exactly the kind of thing a constant should never
+#       be. Instead, the EventRegistry upgrade that wires the real
+#       version_has_live_cover cross-contract calls also adds a
+#       governor-only set_factory(Address) that succeeds only while
+#       config.factory still holds this redeploy's own placeholder
+#       (`sylox-testnet-admin`) - written once, then permanently
+#       locked, taking the real address as a call argument (so it
+#       works on any network) and landing together with the code that
+#       actually reads it, so it is testable against real behavior.
+#       See deploy/README.md's "Upgrading a contract" section for the
+#       general upgrade procedure this would follow.
 #
 # Identities (created only if they don't already exist, then funded
 # via Friendbot): sylox-testnet-deployer, sylox-testnet-admin,
