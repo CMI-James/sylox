@@ -100,6 +100,51 @@ DEMO_ISSUER=sylox-demo-issuer
 log() { echo "==> $*"; }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
+# Parses an i128 value out of `stellar contract invoke --send=no`'s own
+# output. Review finding (this session): that output wraps a plain
+# integer return in literal double quotes (e.g. ["1500000000"], not
+# 1500000000), which a bare ^[0-9]+$ match against the raw string never
+# matches - so a check written as "if it looks like a number and is
+# > 0" silently fell through to its own else branch for EVERY holder
+# that already had a real, nonzero balance, treating "already funded"
+# as "needs minting". This is what let an earlier run double-mint (the
+# real holder history: 100 + 100 - 50 = 150, not the 100 - 50 = 50 the
+# original fix assumed - see docs/event-0-demousd-issuer-freeze.md).
+# Strips one leading/trailing double quote if present, then requires
+# the result to be ALL digits - never falls back to treating an
+# unparseable value as zero or "skip", since either silently mints
+# into an unknown real balance.
+parse_i128() {
+  local raw="$1" label="$2"
+  local cleaned="${raw#\"}"
+  cleaned="${cleaned%\"}"
+  if [[ ! "$cleaned" =~ ^[0-9]+$ ]]; then
+    die "could not parse $label as an integer (got: $raw)"
+  fi
+  echo "$cleaned"
+}
+
+# Reads whether `trustor`'s trustline to `asset_code:asset_issuer` is
+# currently authorized, straight from Horizon (not assumed from this
+# script's own prior actions, which may not be the only thing that
+# ever touched this trustline - e.g. a previous run of this same
+# script, now treated as a legitimate prior state to detect and skip
+# past, not an error). Returns "true", "false", or dies if the
+# trustline cannot be found at all (a holder with no trustline yet is
+# a different, earlier problem than this function is meant to check).
+read_trustline_authorized() {
+  local trustor="$1" asset_code="$2" asset_issuer="$3"
+  local account_json
+  account_json="$(curl -sSf "$HORIZON_URL/accounts/$trustor" 2>&1)" \
+    || die "could not read $trustor's account from Horizon: $account_json"
+  local authorized
+  authorized="$(echo "$account_json" | jq -r --arg code "$asset_code" --arg issuer "$asset_issuer" \
+    '.balances[] | select(.asset_code == $code and .asset_issuer == $issuer) | .is_authorized')"
+  [[ -n "$authorized" && "$authorized" != "null" ]] \
+    || die "$trustor has no $asset_code:$asset_issuer trustline to check authorization on"
+  echo "$authorized"
+}
+
 # Real circulating supply for DEMOUSD, in stroops (SCALE 1e7), read
 # fresh from Horizon every time it's needed: authorized +
 # authorized_to_maintain_liabilities + unauthorized balances, the
@@ -123,9 +168,20 @@ read_real_supply() {
 LIQUIDITY="500000000"        # 50 units at SCALE 1e7. SAMPLE (see header).
 
 # -- [1/6] Holder identity and trustline -----------------------------
+#
+# sylox-demo-holder-2, not the original sylox-demo-holder: that first
+# holder's own trustline is permanently deauthorized (the real event-0
+# revocation, see docs/event-0-demousd-issuer-freeze.md) with 150
+# DEMOUSD of real clawback-eligible balance still on it. Reusing it
+# here would either collide with read_trustline_authorized's own
+# unexpected-state check below (it is neither "authorized" nor the
+# pre-change-trust "none" case this script expects at a fresh start)
+# or, worse, mint a second batch on top of an already-event-marked
+# holder. This script's own header already says a reset means a fresh
+# holder, not a re-run against the same one.
 
 log "[1/6] DEMOUSD holder identity"
-HOLDER=sylox-demo-holder
+HOLDER=sylox-demo-holder-2
 if "$STELLAR_BIN" keys address "$HOLDER" >/dev/null 2>&1; then
   log "identity $HOLDER already exists"
 else
@@ -136,8 +192,8 @@ HOLDER_ADDR="$("$STELLAR_BIN" keys address "$HOLDER")"
 
 # Persisted so anything outside this script's own local CLI identity
 # store (deploy/extend-ttl.sh, run from a container that never created
-# or imported "sylox-demo-holder") can still find the holder's address
-# without deriving it from the identity itself.
+# or imported "sylox-demo-holder-2") can still find the holder's
+# address without deriving it from the identity itself.
 tmp_demo_record="$(mktemp)"
 jq --arg holder "$HOLDER_ADDR" '.demo_asset.holder = $holder' "$DEMO_RECORD" > "$tmp_demo_record"
 mv "$tmp_demo_record" "$DEMO_RECORD"
@@ -160,9 +216,10 @@ log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
 # from the chain, not assumed) is still zero.
 
 log "[2/6] DEMOUSD balance for $HOLDER_ADDR"
-holder_balance_before="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+holder_balance_before_raw="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
   --network testnet --send=no -- balance --id "$HOLDER_ADDR" 2>&1)"
-if [[ "$holder_balance_before" =~ ^[0-9]+$ ]] && (( holder_balance_before > 0 )); then
+holder_balance_before="$(parse_i128 "$holder_balance_before_raw" "$HOLDER_ADDR's DEMOUSD balance")"
+if (( holder_balance_before > 0 )); then
   log "$HOLDER_ADDR already holds $holder_balance_before stroops of DEMOUSD; not minting again"
 else
   HOLDER_BALANCE=1000000000   # 100 units at SCALE 1e7, arbitrary plausible size, enough to partially clawback.
@@ -215,21 +272,40 @@ done
 # differ (they should not, for a single whole clawback, but the posted
 # number must be the real one regardless).
 
-holder_balance_now="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+holder_balance_now_raw="$("$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
   --network testnet --send=no -- balance --id "$HOLDER_ADDR" 2>&1)"
-[[ "$holder_balance_now" =~ ^[0-9]+$ ]] || die "could not read $HOLDER_ADDR's real DEMOUSD balance: $holder_balance_now"
+holder_balance_now="$(parse_i128 "$holder_balance_now_raw" "$HOLDER_ADDR's real DEMOUSD balance")"
 CLAWBACK_REQUEST=$(( holder_balance_now / 2 ))   # Half of whatever the holder really holds right now.
 (( CLAWBACK_REQUEST > 0 )) || die "$HOLDER_ADDR holds $holder_balance_now stroops of DEMOUSD; nothing to claw back"
 
 log "[4/6] Revoking $HOLDER_ADDR's authorization for $DEMO_CODE"
-if ! revoke_out="$("$STELLAR_BIN" tx new set-trustline-flags --source-account "$DEMO_ISSUER" --network testnet \
-  --trustor "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --clear-authorize 2>&1)"; then
-  die "revoking $HOLDER_ADDR's authorization failed:
+# Checked by real state, not assumed: a fresh holder's trustline reads
+# "true" here (change-trust alone does not revoke anything); only a
+# PRIOR run of this same script (interrupted after revoking but before
+# the clawback) would ever find "false" already. Either is a known,
+# safe-to-continue state; anything else (e.g. the account not holding
+# this trustline at all) is a real problem, not something to paper
+# over by calling set-trustline-flags regardless.
+already_authorized="$(read_trustline_authorized "$HOLDER_ADDR" "$DEMO_CODE" "$DEMO_ISSUER_ADDR")"
+case "$already_authorized" in
+  true)
+    if ! revoke_out="$("$STELLAR_BIN" tx new set-trustline-flags --source-account "$DEMO_ISSUER" --network testnet \
+      --trustor "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --clear-authorize 2>&1)"; then
+      die "revoking $HOLDER_ADDR's authorization failed:
 $revoke_out"
-fi
-echo "$revoke_out"
-REVOKE_TX_HASH="$(echo "$revoke_out" | grep -oE '[a-f0-9]{64}' | head -1)"
-log "revocation transaction: $REVOKE_TX_HASH"
+    fi
+    echo "$revoke_out"
+    REVOKE_TX_HASH="$(echo "$revoke_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+    log "revocation transaction: $REVOKE_TX_HASH"
+    ;;
+  false)
+    log "$HOLDER_ADDR's trustline is already deauthorized (a prior run of this script got this far); not revoking again"
+    REVOKE_TX_HASH=""
+    ;;
+  *)
+    die "$HOLDER_ADDR's $DEMO_CODE trustline authorization read as an unexpected value: $already_authorized"
+    ;;
+esac
 
 log "Clawing back $CLAWBACK_REQUEST (of $holder_balance_now held) from $HOLDER_ADDR"
 if ! clawback_out="$("$STELLAR_BIN" tx new clawback --source-account "$DEMO_ISSUER" --network testnet \

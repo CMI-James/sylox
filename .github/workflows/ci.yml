@@ -60,6 +60,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash deploy/test-extend-ttl-jq.sh
 
+  demo-asset-trigger-parse-i128-test:
+    name: deploy/demo-asset-trigger.sh parse_i128 regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-demo-asset-trigger-parse-i128.sh
+
   test:
     name: cargo test --workspace
     runs-on: ubuntu-latest
