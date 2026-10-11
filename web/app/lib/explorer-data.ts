@@ -1,6 +1,7 @@
 import { riskOracleClient } from "./contracts/risk-oracle";
 import { assetDisplayName } from "./contracts/token";
 import { riskBandFor } from "./band";
+import { extractErrorCode, describeScoreError } from "./contract-errors";
 import type { RiskBand } from "@sylox/ui/risk-bands";
 
 const PEG_RATIO_SCALE = 10_000_000; // i128, scale 1e7 (lib/contracts/risk-oracle's own doc comment on peg_ratio).
@@ -77,9 +78,7 @@ async function fetchRow(
 
   const scoreResult = scoreTx.result;
   if (scoreResult.isErr()) {
-    throw new Error(
-      `RiskOracle.score returned a contract error: ${scoreResult.unwrapErr().message}`,
-    );
+    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
   }
   const riskScore = scoreResult.unwrap();
 
