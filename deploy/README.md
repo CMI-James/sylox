@@ -361,6 +361,29 @@ clearly, and the combined script exits 1 so Railway shows it as a
 crashed run (worth investigating, but never at the cost of a posting
 pass that already succeeded).
 
+**Known-fixed: the `NextEventId` read on a brand new EventRegistry.**
+Found during the testnet redeploy that shipped issues #12 and #21: on
+an EventRegistry that has never had `propose_tier1` called at all
+(`storage::next_event_id` is written only there, never by
+`register_definition`), the script's own `jq` read for `NextEventId`
+came back empty and the whole run died. `|` binds more loosely than
+`//`, so the unparenthesized `storage[] | select(...) | .val.u64 //
+"0"` put the fallback inside the per-element pipe; when no element
+matches, that pipe produces nothing, so the whole read came back
+empty. Parenthesizing the pipeline moves `//` outside it, around the
+whole expression - and `//` also fires on a genuinely empty result,
+not only on `null`, so `(storage[] | select(...) | .val.u64) // "0"`
+reads `"0"` when `NextEventId` was never written. Every previous
+deploy this was tested against already had a real event posted by the
+time `extend-ttl.sh` first ran, so this path was never exercised
+before. `deploy/test-extend-ttl-jq.sh` reads the real filter directly
+out of `extend-ttl.sh`'s own `NEXT_EVENT_ID_JQ` constant (so the test
+can't drift from the real one) and runs it against small JSON samples
+(key missing, key present with a real value, key present storing a
+literal `0`) - audited every other `jq` lookup in `extend-ttl.sh` for
+the same `select(...) // default` shape at the same time; this was the
+only one.
+
 ## Upgrading a contract (issue #12)
 
 Every core contract (`RiskOracle`, `EventRegistry`, `Treasury`,

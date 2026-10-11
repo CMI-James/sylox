@@ -76,6 +76,19 @@ SECS_PER_LEDGER=5
 EXTEND_THRESHOLD_LEDGERS=$(( 14 * 24 * 3600 / SECS_PER_LEDGER ))   # 241,920: 14 days.
 EXTEND_TARGET_LEDGERS=$(( 30 * 24 * 3600 / SECS_PER_LEDGER ))      # 518,400: 30 days.
 
+# `|` binds more loosely than `//`, so an unparenthesized
+# `storage[] | select(...) | .val.u64 // "0"` puts the fallback inside
+# the per-element pipe; when no element matches, that pipe produces
+# nothing, so the whole read comes back empty. Parenthesizing the
+# pipeline moves `//` outside it, around the whole expression - and
+# `//` also fires on a genuinely empty result, not only on `null`, so
+# `(storage[] | select(...) | .val.u64) // "0"` reads "0" when
+# NextEventId was never written. A constant, not inlined at its own
+# call site below, so deploy/test-extend-ttl-jq.sh can grep this exact
+# line and test the real filter rather than a copy that could drift
+# from it.
+NEXT_EVENT_ID_JQ='(.contract_data.val.contract_instance.storage[] | select(.key.vec[0].symbol == "NextEventId") | .val.u64) // "0"'
+
 RO_ID="$(jq -r '.contracts.risk_oracle.id' "$RECORD")"
 ER_ID="$(jq -r '.contracts.event_registry.id' "$RECORD")"
 TR_ID="$(jq -r '.contracts.treasury.id' "$RECORD")"
@@ -244,8 +257,10 @@ er_instance_response="$(curl -sSf -X POST "$RPC_URL" -H "Content-Type: applicati
   || die "getLedgerEntries(EventRegistry instance) failed"
 er_entry_xdr="$(echo "$er_instance_response" | jq -r '.result.entries[0].xdr // empty')"
 [[ -n "$er_entry_xdr" ]] || die "EventRegistry's own instance entry was not found; cannot read NextEventId"
+# See NEXT_EVENT_ID_JQ's own definition, near this script's other
+# constants, for why it's parenthesized the way it is.
 next_event_id="$(echo "$er_entry_xdr" | "$STELLAR_BIN" xdr decode --type LedgerEntryData --output json \
-  | jq -r '.contract_data.val.contract_instance.storage[] | select(.key.vec[0].symbol == "NextEventId") | .val.u64 // "0"')"
+  | jq -r "$NEXT_EVENT_ID_JQ")"
 [[ "$next_event_id" =~ ^[0-9]+$ ]] || die "could not read EventRegistry.NextEventId (got: $next_event_id)"
 log "EventRegistry NextEventId: $next_event_id (events 0..$(( next_event_id - 1 )) tracked, if any)"
 
