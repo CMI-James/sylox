@@ -1,16 +1,41 @@
-import { riskOracleClient } from "./contracts/risk-oracle";
-import { eventRegistryClient } from "./contracts/event-registry";
-import { assetDisplayName } from "./contracts/token";
+import {
+  Networks,
+  SyloxError,
+  assetDisplayName,
+  riskOracleClient,
+  eventRegistryClient,
+  type EffectiveRingSlot,
+  type EventKind,
+  type CoverGate,
+  type SlotState,
+  type SubEpoch,
+} from "@sylox/sdk";
+import { al } from "./sylox-client";
 import { riskBandFor } from "./band";
-import { extractErrorCode, describeScoreError, describeCoverGateError } from "./contract-errors";
 import type { RiskBand } from "@sylox/ui/risk-bands";
-import type { RingSlot, SlotState, SubEpoch } from "./contracts/risk-oracle";
-import type { CoverGate, EventKind } from "./contracts/event-registry";
 
 export const PEG_RATIO_SCALE = 10_000_000; // i128, scale 1e7 (RiskOracle's own doc comment on peg_ratio).
 const EPOCH_SECS = 3600; // technical-doc.md Section 23: epoch_secs is frozen at 3600 (1 hour) for v1.
 const AGGREGATE_SLOTS_7D = 168; // contracts/risk-oracle/src/score.rs's AGGREGATE_SLOTS_7D - the 7-day score baseline (review decision D2), same constant lib.rs's own scoring gate checks against first_epoch.
 const SIGNAL_DISPUTE_SECS = 7_200; // contracts/staking/src/params.rs's SIGNAL_DISPUTE_SECS (2h) - the dispute window an hour must clear before Pending can be promoted to Final; also re-declared locally in contracts/risk-oracle/src/lib.rs with the same value.
+
+// `al.oracle`/`al.events` deliberately only wrap a subset of reads (see
+// oracle.ts/events/list.ts's own "thinner surface" doc comments) -
+// asset_config/event_in_progress (RiskOracle) and current_version/
+// definition (EventRegistry) have no al.* method. riskOracleClient/
+// eventRegistryClient (newly re-exported from @sylox/sdk - see this
+// PR's description's "SDK export gap" section) are the same
+// generated-bindings clients al.oracle/al.events are themselves built
+// on, used here only for the handful of fields that have no al.*
+// wrapper. Every other read in this file goes through al.oracle/
+// al.events, never these directly.
+function oracleContract() {
+  return riskOracleClient(Networks.Testnet);
+}
+
+function registryContract() {
+  return eventRegistryClient(Networks.Testnet);
+}
 
 /** A Result<T, {message}> from a generated client, normalized to a plain outcome. */
 type SectionResult<T> = { status: "ok"; value: T } | { status: "error"; message: string };
@@ -88,23 +113,22 @@ function codeFromDisplayName(name: string, asset: string): string {
   return code && code !== name ? code : `${asset.slice(0, 4)}…${asset.slice(-4)}`;
 }
 
-async function fetchHeader(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<AssetHeader> {
-  const [scoreTx, staleTx, inProgressTx, configTx, name] = await Promise.all([
-    oracle.score({ asset }),
+async function fetchHeader(asset: string): Promise<AssetHeader> {
+  const oracle = oracleContract();
+
+  const [riskScore, staleTx, inProgressTx, configTx, name] = await Promise.all([
+    // al.oracle.score() already throws a SyloxError (its message is
+    // the right plain sentence) on the contract's Err case - no more
+    // separate extractErrorCode/describeScoreError call needed; this
+    // function's own section() wrapper (in fetchAssetPageData below)
+    // already reshapes any thrown error into {status: "error", message}.
+    al.oracle.score(asset),
     oracle.check_stale({ asset }),
     oracle.event_in_progress({ asset }),
     oracle.asset_config({ asset }),
-    assetDisplayName(asset),
+    assetDisplayName(Networks.Testnet, asset),
   ]);
 
-  const scoreResult = scoreTx.result;
-  if (scoreResult.isErr()) {
-    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
-  }
-  const riskScore = scoreResult.unwrap();
   const hasRealScore = riskScore.epoch !== BigInt(0);
 
   const staleResult = staleTx.result;
@@ -117,7 +141,7 @@ async function fetchHeader(
   // the "no score yet" UI state).
   const scoringStart = hasRealScore
     ? { status: "unknown" as const } // Unused in this branch - the UI never reads scoringStart once score is non-null.
-    : await fetchScoringStart(oracle, asset);
+    : await fetchScoringStart(asset);
 
   return {
     asset,
@@ -142,12 +166,20 @@ async function fetchHeader(
  * dispute window, so the earliest moment is that hour's own posting time
  * (`first_epoch + AGGREGATE_SLOTS_7D` hours, i.e. the START of the next
  * hour after it) plus SIGNAL_DISPUTE_SECS, not a bare `+ 168h`.
+ *
+ * `al.oracle.firstEpoch(asset)` deliberately DEVIATES from this file's
+ * own historical "never throw" contract (see its own doc comment in
+ * packages/sdk/src/oracle.ts): it throws a SyloxError on a genuine
+ * read failure, only resolving `null` for the real "never posted" case.
+ * This function restores the old silent-fallback UX at exactly this
+ * call site - both a thrown SyloxError and a resolved `null` read the
+ * same here ("unknown"), matching tryFetchFirstEpoch's documented
+ * behavior exactly, so a transient RPC failure reading first_epoch can
+ * never crash the whole asset page, only leave this one field showing
+ * "scoring start unknown."
  */
-export async function fetchScoringStart(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<ScoringStart> {
-  const firstEpoch = await tryFetchFirstEpoch(oracle, asset);
+export async function fetchScoringStart(asset: string): Promise<ScoringStart> {
+  const firstEpoch = await tryFetchFirstEpoch(asset);
   if (firstEpoch === undefined) return { status: "unknown" };
   const earliestUnixSecs =
     (Number(firstEpoch) + AGGREGATE_SLOTS_7D) * EPOCH_SECS + SIGNAL_DISPUTE_SECS;
@@ -182,19 +214,9 @@ export interface LatestPendingHour {
 }
 
 export async function fetchConfirmed(
-  oracle: ReturnType<typeof riskOracleClient>,
   asset: string,
 ): Promise<{ confirmed: ConfirmedValue | null; latestPending: LatestPendingHour | null }> {
-  const [ring, scoreTx] = await Promise.all([
-    fetchEffectiveRing(oracle, asset),
-    oracle.score({ asset }),
-  ]);
-
-  const scoreResult = scoreTx.result;
-  if (scoreResult.isErr()) {
-    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
-  }
-  const riskScore = scoreResult.unwrap();
+  const [ring, riskScore] = await Promise.all([al.oracle.ring(asset), al.oracle.score(asset)]);
 
   // Walk newest-to-oldest (the ring is returned oldest-first) for the
   // newest slot that is effectively Final - this is the hour "score" and
@@ -243,16 +265,21 @@ export type LiveValue =
       postedAt: number;
     };
 
-/** technical-doc.md Section 5.9/12.1 (v1.5): the newest POSTED sub-epoch's Pending/challengeable data, distinct from `latest()`'s hourly-only Final/Pending semantics. Never used for `require_holding` or any other payout-adjacent valuation. */
-export async function fetchLive(oracle: ReturnType<typeof riskOracleClient>, asset: string): Promise<LiveValue> {
-  const tx = await oracle.live({ asset });
-  const result = tx.result;
-  // SDK 17's generated bindings decode a contract's `Option<T>` as
-  // `T | null`, not `T | undefined` - checked for both here (and at
-  // every other Option<T> read in this file) since nothing about the
-  // contract's own semantics changed, only the SDK's own JS
-  // representation of "no value" did.
-  if (result === undefined || result === null) return { status: "none" };
+/**
+ * technical-doc.md Section 5.9/12.1 (v1.5): the newest POSTED
+ * sub-epoch's Pending/challengeable data, distinct from `latest()`'s
+ * hourly-only Final/Pending semantics. Never used for `require_holding`
+ * or any other payout-adjacent valuation.
+ *
+ * `al.oracle.live(asset)` returns the raw decoded tuple
+ * `[SubEpoch, SignalSet, SlotState] | null` directly (never this file's
+ * own `LiveValue` display shape) - that reshaping still happens here,
+ * same as it always did, just from the SDK's already-decoded tuple
+ * instead of a raw tx result.
+ */
+export async function fetchLive(asset: string): Promise<LiveValue> {
+  const result = await al.oracle.live(asset);
+  if (result === null) return { status: "none" };
   const [subEpoch, signals, slotState] = result;
   return {
     status: "value",
@@ -266,8 +293,6 @@ export async function fetchLive(oracle: ReturnType<typeof riskOracleClient>, ass
 // ---------------------------------------------------------------------------
 // 3. Peg history (ring)
 // ---------------------------------------------------------------------------
-
-const RING_SLOTS = 240; // contracts/risk-oracle/src/storage.rs: RING_SLOTS, frozen for v1.
 
 export interface PegHistoryPoint {
   /** Unix seconds (epoch * EPOCH_SECS), the real time axis - never slot index. */
@@ -307,110 +332,24 @@ export interface PegHistoryPoint {
   provisionalSubCoverage: number | null;
 }
 
-export interface EffectiveRingSlot extends RingSlot {
-  /** `storage::effective_state`'s result for this slot, via RiskOracle.effective_window - the contract's own Pending-to-Final promotion rule, never reimplemented client-side. */
-  effectiveState: SlotState["tag"];
-}
+export type { EffectiveRingSlot };
 
-/**
- * `ring()` returns slots oldest-first, but a never-written slot's stored
- * `epoch` is 0 (storage.rs's `empty_slot()` default) - using it directly
- * for the time axis puts empty hours in 1970. The ring's own layout
- * (storage.rs's `get_ring`: positions `newest_index+1 .. newest_index`,
- * wrapping) means array index `i` always corresponds to real epoch
- * `newestEpoch - (RING_SLOTS - 1) + i`, regardless of what any individual
- * slot's stored epoch says - so the axis is derived from the newest
- * epoch and position alone, never from a per-slot epoch field.
- *
- * `newestEpoch` itself is anchored on whichever array index actually
- * holds the newest non-Empty slot, not assumed to be the last index -
- * the newest hour can itself be Empty (ADR-005: an overturned slot
- * returns to Empty for reposting), in which case the real newest slot
- * sits earlier in the array and every derived epoch must be computed
- * from ITS index, or the whole axis is off by a constant amount.
- *
- * Paired here with `effective_window`, the contract's own read for
- * whether a Pending slot's dispute window has already elapsed
- * (ADR-008/review item C5) - the only Final/not-Final rule this screen
- * uses, never `now >= pending_until` reimplemented client-side.
- */
-export async function fetchEffectiveRing(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<EffectiveRingSlot[]> {
-  const ringTx = await oracle.ring({ asset });
-  const slots: RingSlot[] = ringTx.result;
-
-  // The newest non-Empty slot isn't necessarily at the last array index -
-  // if the newest hour was overturned and reopened (ADR-005: an
-  // overturned slot returns to Empty for reposting), the array's last
-  // slot can itself be Empty while an earlier one is real. Anchoring on
-  // that slot's own index (not an assumed "last position") is what keeps
-  // the derived axis correct in that case: newestEpoch = slot[j].epoch +
-  // (RING_SLOTS - 1 - j), for whichever index j actually holds it.
-  let anchorIndex = -1;
-  for (let i = slots.length - 1; i >= 0; i--) {
-    if (slots[i].state.tag !== "Empty") {
-      anchorIndex = i;
-      break;
-    }
-  }
-  if (anchorIndex === -1) {
-    // Never posted: no real epoch to anchor the axis to. Every slot stays
-    // Empty; the axis values are arbitrary since nothing will render as a
-    // point anyway (every pegRatio comes out null for an all-Empty ring).
-    return slots.map((slot) => ({ ...slot, effectiveState: "Empty" }));
-  }
-
-  const anchorSlot = slots[anchorIndex];
-  const newestEpoch = anchorSlot.epoch + BigInt(RING_SLOTS - 1 - anchorIndex);
-  const oldestEpoch =
-    newestEpoch >= BigInt(RING_SLOTS - 1) ? newestEpoch - BigInt(RING_SLOTS - 1) : BigInt(0);
-
-  const windowTx = await oracle.effective_window({
-    asset,
-    start_epoch: oldestEpoch,
-    count: RING_SLOTS,
-  });
-  const effectiveStates = windowTx.result; // Array<SlotState | undefined>, indexed by (epoch - oldestEpoch).
-
-  return slots.map((slot, i) => {
-    const epoch = newestEpoch - BigInt(RING_SLOTS - 1) + BigInt(i);
-    const windowIndex = Number(epoch - oldestEpoch);
-    const effective = effectiveStates[windowIndex];
-    return {
-      ...slot,
-      epoch, // Overrides the raw stored epoch (0 for an unwritten slot) with the derived, always-correct one.
-      effectiveState: effective ? effective.tag : "Empty",
-    };
-  });
-}
-
-/** `first_epoch()`'s result, or undefined on ANY failure (rejection or a synchronous throw) - "treat every hour as tracked" rather than guessing. Normalizes the SDK's own `null` ("no value") to this function's `undefined` convention right here, so every caller keeps its existing `=== undefined` check. */
-async function tryFetchFirstEpoch(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<bigint | undefined> {
+/** `first_epoch()`'s result, or undefined on ANY failure (rejection or a synchronous throw, including a thrown SyloxError) - "treat every hour as tracked" rather than guessing. Normalizes al.oracle.firstEpoch's own `null` ("no value") to this function's `undefined` convention right here, so every caller keeps its existing `=== undefined` check. */
+async function tryFetchFirstEpoch(asset: string): Promise<bigint | undefined> {
   try {
-    const tx = await oracle.first_epoch({ asset });
-    return tx.result ?? undefined;
+    const firstEpoch = await al.oracle.firstEpoch(asset);
+    return firstEpoch ?? undefined;
   } catch {
     return undefined;
   }
 }
 
-export async function fetchPegHistory(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<PegHistoryPoint[]> {
+export async function fetchPegHistory(asset: string): Promise<PegHistoryPoint[]> {
   // A separate first_epoch() call (the header makes its own too) so this
   // section keeps failing independently of the header - and so a failure
   // here specifically can fall back to "treat every hour as tracked"
   // rather than taking down the whole chart.
-  const [ring, firstEpoch] = await Promise.all([
-    fetchEffectiveRing(oracle, asset),
-    tryFetchFirstEpoch(oracle, asset),
-  ]);
+  const [ring, firstEpoch] = await Promise.all([al.oracle.ring(asset), tryFetchFirstEpoch(asset)]);
 
   return ring.map((slot) => ({
     timestamp: Number(slot.epoch) * EPOCH_SECS,
@@ -479,13 +418,13 @@ export function sentenceFor(
   }
 }
 
-async function fetchOneDefinition(
-  registry: ReturnType<typeof eventRegistryClient>,
-  asset: string,
-  kind: EventKind["tag"],
-) {
+async function fetchOneDefinition(asset: string, kind: EventKind["tag"]) {
   // definition() needs an explicit version; current_version() gives the
-  // canonical one to ask for.
+  // canonical one to ask for. Neither has a dedicated al.events read in
+  // this SDK version (al.events's own surface is event/status/
+  // coverGate/list - see events/list.ts) - read directly against the
+  // same registry contract client fetchHeader/fetchCoverGate use.
+  const registry = registryContract();
   const versionTx = await registry.current_version({ asset, kind: { tag: kind, values: undefined } });
   const version = versionTx.result;
   if (version === 0) return null; // No canonical definition registered for this kind yet.
@@ -498,13 +437,10 @@ async function fetchOneDefinition(
   return defTx.result ?? null;
 }
 
-async function fetchFailureDefinitions(
-  registry: ReturnType<typeof eventRegistryClient>,
-  asset: string,
-): Promise<FailureDefinition[]> {
+async function fetchFailureDefinitions(asset: string): Promise<FailureDefinition[]> {
   const results = await Promise.all(
     EVENT_KINDS.map(async (kind) => {
-      const def = await fetchOneDefinition(registry, asset, kind);
+      const def = await fetchOneDefinition(asset, kind);
       if (!def) return null;
       return { kind, sentence: sentenceFor(kind, def) };
     }),
@@ -542,37 +478,28 @@ export type CoverSalesStatus =
   | { gate: "Distressed"; label: string }
   | { gate: CoverGate["tag"]; label: string };
 
-export async function fetchCoverGate(
-  oracle: ReturnType<typeof riskOracleClient>,
-  registry: ReturnType<typeof eventRegistryClient>,
-  asset: string,
-): Promise<CoverSalesStatus> {
-  const [staleTx, scoreTx, gateTx] = await Promise.all([
-    oracle.check_stale({ asset }),
-    oracle.score({ asset }),
-    registry.cover_gate({ asset }),
-  ]);
-
+export async function fetchCoverGate(asset: string): Promise<CoverSalesStatus> {
+  // al.oracle.score() and al.events.coverGate() already throw
+  // SyloxError on their contract Err case - the old code's own
+  // isErr()-check-then-describe*Error pattern isn't needed any more.
+  // check_stale is read directly (same as fetchHeader) since isStale()
+  // throws on Err rather than this file's old fail-safe-to-stale
+  // default - restored explicitly here via the same raw contract read
+  // fetchHeader itself uses, keeping the exact old fallback behavior.
+  const staleTx = await oracleContract().check_stale({ asset });
   const staleResult = staleTx.result;
   const stale = staleResult.isErr() ? true : staleResult.unwrap();
   if (stale) {
     return { gate: "Stale", label: "Sales paused: not enough price history yet." };
   }
 
-  const scoreResult = scoreTx.result;
-  if (scoreResult.isErr()) {
-    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
-  }
-  const band = scoreResult.unwrap().band.tag;
+  const riskScore = await al.oracle.score(asset);
+  const band = riskScore.band.tag;
   if (band === "Distress" || band === "Event") {
     return { gate: "Distressed", label: "Sales paused: the asset is in distress." };
   }
 
-  const gateResult = gateTx.result;
-  if (gateResult.isErr()) {
-    throw new Error(`Couldn't check cover sale status: ${describeCoverGateError(extractErrorCode(gateTx))}`);
-  }
-  const gate = gateResult.unwrap();
+  const gate = await al.events.coverGate(asset);
   return { gate: gate.tag, label: COVER_GATE_LABEL[gate.tag] };
 }
 
@@ -586,19 +513,13 @@ export interface ActiveEvents {
   eventIds: bigint[];
 }
 
-async function fetchActiveEventCount(
-  registry: ReturnType<typeof eventRegistryClient>,
-  asset: string,
-): Promise<ActiveEvents> {
+async function fetchActiveEventCount(asset: string): Promise<ActiveEvents> {
   const [countTx, statuses] = await Promise.all([
-    registry.active_event_count({ asset }),
-    Promise.all(
-      EVENT_KINDS.map((kind) => registry.event_status({ asset, kind: { tag: kind, values: undefined } })),
-    ),
+    registryContract().active_event_count({ asset }),
+    Promise.all(EVENT_KINDS.map((kind) => al.events.status(asset, kind))),
   ]);
 
   const eventIds = statuses
-    .map((tx) => tx.result)
     .filter((status) => status.tag === "InProgress")
     .map((status) => status.values[0]);
 
@@ -620,19 +541,18 @@ export interface AssetPageData {
 }
 
 export async function fetchAssetPageData(asset: string): Promise<AssetPageData> {
-  const oracle = riskOracleClient();
-  const registry = eventRegistryClient();
-
   const [header, confirmed, live, pegHistory, failureDefinitions, coverGate, activeEventCount] =
     await Promise.all([
-      section(() => fetchHeader(oracle, asset)),
-      section(() => fetchConfirmed(oracle, asset)),
-      section(() => fetchLive(oracle, asset)),
-      section(() => fetchPegHistory(oracle, asset)),
-      section(() => fetchFailureDefinitions(registry, asset)),
-      section(() => fetchCoverGate(oracle, registry, asset)),
-      section(() => fetchActiveEventCount(registry, asset)),
+      section(() => fetchHeader(asset)),
+      section(() => fetchConfirmed(asset)),
+      section(() => fetchLive(asset)),
+      section(() => fetchPegHistory(asset)),
+      section(() => fetchFailureDefinitions(asset)),
+      section(() => fetchCoverGate(asset)),
+      section(() => fetchActiveEventCount(asset)),
     ]);
 
   return { header, confirmed, live, pegHistory, failureDefinitions, coverGate, activeEventCount };
 }
+
+export { SyloxError };

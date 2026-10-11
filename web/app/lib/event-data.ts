@@ -1,7 +1,14 @@
-import { eventRegistryClient } from "./contracts/event-registry";
-import { assetDisplayName } from "./contracts/token";
+import { Networks, assetDisplayName, eventRegistryClient, type EventRecord, type CureProgress, type EventDefinition } from "@sylox/sdk";
+import { al } from "./sylox-client";
 import { sentenceFor } from "./asset-data";
-import type { EventRecord, CureProgress, EventDefinition } from "./contracts/event-registry";
+
+// EventRegistry.definition has no al.events wrapper (al.events's own
+// surface is event/status/coverGate/list - see events/list.ts's top
+// doc comment) - read directly, same pattern as asset-data.ts's own
+// fetchOneDefinition.
+function registryContract() {
+  return eventRegistryClient(Networks.Testnet);
+}
 
 /** A Result<T, {message}> from a generated client, normalized to a plain outcome - same shape as asset-data.ts's SectionResult, kept local since this module has its own independent sections. */
 type SectionResult<T> = { status: "ok"; value: T } | { status: "error"; message: string };
@@ -33,23 +40,18 @@ export interface EventProposal {
   definitionSentence: string;
 }
 
-async function fetchEventRecord(
-  registry: ReturnType<typeof eventRegistryClient>,
-  eventId: bigint,
-): Promise<EventRecord> {
-  const tx = await registry.event({ event_id: eventId });
-  const record = tx.result;
+async function fetchEventRecord(eventId: bigint): Promise<EventRecord> {
+  const record = await al.events.event(eventId);
   if (!record) throw new Error(`No event found with id ${eventId}.`);
   return record;
 }
 
 async function fetchDefinitionByVersion(
-  registry: ReturnType<typeof eventRegistryClient>,
   asset: string,
   kind: EventRecord["kind"],
   version: number,
 ): Promise<EventDefinition> {
-  const tx = await registry.definition({ asset, kind, version });
+  const tx = await registryContract().definition({ asset, kind, version });
   const def = tx.result;
   if (!def) {
     throw new Error(`No definition found for this event's pinned version (${version}).`);
@@ -57,14 +59,11 @@ async function fetchDefinitionByVersion(
   return def;
 }
 
-async function fetchProposal(
-  registry: ReturnType<typeof eventRegistryClient>,
-  eventId: bigint,
-): Promise<{ proposal: EventProposal; def: EventDefinition }> {
-  const record = await fetchEventRecord(registry, eventId);
+async function fetchProposal(eventId: bigint): Promise<{ proposal: EventProposal; def: EventDefinition }> {
+  const record = await fetchEventRecord(eventId);
   const [assetCode, def] = await Promise.all([
-    assetDisplayName(record.asset).then((name) => name.split(":")[0] || name),
-    fetchDefinitionByVersion(registry, record.asset, record.kind, record.def_version),
+    assetDisplayName(Networks.Testnet, record.asset).then((name) => name.split(":")[0] || name),
+    fetchDefinitionByVersion(record.asset, record.kind, record.def_version),
   ]);
 
   return {
@@ -98,18 +97,15 @@ export type CountdownPhase =
  * lib.rs), never recomputed client-side from escalated_at + a locally
  * held challenge_secs/ruling_deadline_secs that could drift from what
  * the contract actually used if the definition was later superseded.
+ * No dedicated al.events wrapper for ruling_deadline either - read
+ * directly, same as definition() above.
  */
-async function fetchCountdown(
-  registry: ReturnType<typeof eventRegistryClient>,
-  eventId: bigint,
-  record: EventRecord,
-  def: EventDefinition,
-): Promise<CountdownPhase> {
+async function fetchCountdown(eventId: bigint, record: EventRecord, def: EventDefinition): Promise<CountdownPhase> {
   if (record.state.tag === "Proposed") {
     return { phase: "challenge", deadline: record.proposed_at + def.challenge_secs };
   }
   if (record.state.tag === "Escalated") {
-    const tx = await registry.ruling_deadline({ event_id: eventId });
+    const tx = await registryContract().ruling_deadline({ event_id: eventId });
     const deadline = tx.result;
     if (deadline === undefined || deadline === null) {
       throw new Error("Event is Escalated but the contract has no ruling deadline for it.");
@@ -129,13 +125,11 @@ async function fetchCountdown(
  * construction - reading its simulated .result here shows the
  * contract's own current cure-progress record without submitting
  * anything. A real Checkpoint click still calls signAndSend() on this
- * same AssembledTransaction; this fetch is a read, not a hidden write.
+ * same AssembledTransaction (via @sylox/sdk's own prepareCheckpointCure/
+ * confirmCheckpointCure); this fetch is a read, not a hidden write.
  */
-async function fetchCureProgress(
-  registry: ReturnType<typeof eventRegistryClient>,
-  eventId: bigint,
-): Promise<CureProgress | null> {
-  const tx = await registry.checkpoint_cure({ event_id: eventId });
+async function fetchCureProgress(eventId: bigint): Promise<CureProgress | null> {
+  const tx = await registryContract().checkpoint_cure({ event_id: eventId });
   const result = tx.result;
   if (result.isErr()) {
     // WrongState (not Proposed/not a Depeg event) isn't a real error to
@@ -157,8 +151,6 @@ export interface EventPageData {
 }
 
 export async function fetchEventPageData(eventId: bigint): Promise<EventPageData> {
-  const registry = eventRegistryClient();
-
   // The record is fetched once, up front, and reused - every other
   // section needs it (kind/asset/state for the countdown and cure
   // progress), and an event's record is immutable in the fields those
@@ -167,7 +159,7 @@ export async function fetchEventPageData(eventId: bigint): Promise<EventPageData
   // round trips for identical data, not independent freshness.
   let shared: { proposal: EventProposal; def: EventDefinition } | null = null;
   try {
-    shared = await fetchProposal(registry, eventId);
+    shared = await fetchProposal(eventId);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return {
@@ -178,8 +170,8 @@ export async function fetchEventPageData(eventId: bigint): Promise<EventPageData
   }
 
   const [countdown, cureProgress] = await Promise.all([
-    section(() => fetchCountdown(registry, eventId, shared!.proposal.record, shared!.def)),
-    section(() => fetchCureProgress(registry, eventId)),
+    section(() => fetchCountdown(eventId, shared!.proposal.record, shared!.def)),
+    section(() => fetchCureProgress(eventId)),
   ]);
 
   return { proposal: ok(shared.proposal), countdown, cureProgress };

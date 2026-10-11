@@ -8,7 +8,7 @@ import { WriteActionButton } from "@/components/WriteActionButton";
 import { DashboardShell } from "@/components/DashboardShell";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { fetchEventPageData, type EventPageData } from "@/lib/event-data";
-import { prepareCheckpointCure, confirmCheckpointCure, prepareFinalize, confirmFinalize } from "@/lib/event-actions";
+import { Networks, prepareCheckpointCure, confirmCheckpointCure, prepareFinalize, confirmFinalize } from "@sylox/sdk";
 
 type LoadState =
   | { status: "loading" }
@@ -300,7 +300,7 @@ function ActionsSection({
             label="Checkpoint"
             disabled={checkpointDisabled}
             disabledReason={checkpointDisabled ? "Only applies while the event's still Proposed." : undefined}
-            prepare={(address) => prepareCheckpointCure(eventIdBigInt(), address)}
+            prepare={(signer) => prepareCheckpointCure(Networks.Testnet, eventIdBigInt(), signer)}
             confirm={(prepared, signer) => confirmCheckpointCure(prepared, signer)}
             onSuccess={onActionSuccess}
           />
@@ -309,7 +309,7 @@ function ActionsSection({
           label="Finalize"
           disabled={finalizeDisabled}
           disabledReason={finalizeDisabled ? "Only applies to an event that's still Proposed." : undefined}
-          prepare={(address) => prepareFinalize(eventIdBigInt(), address)}
+          prepare={(signer) => prepareFinalize(Networks.Testnet, eventIdBigInt(), signer)}
           confirm={(prepared, signer) => confirmFinalize(prepared, signer)}
           onSuccess={onActionSuccess}
         />

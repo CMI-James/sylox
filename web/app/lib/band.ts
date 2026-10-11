@@ -1,5 +1,5 @@
 import { RISK_BANDS, type RiskBand, type RiskBandName } from "@sylox/ui/risk-bands";
-import type { Band } from "./contracts/risk-oracle";
+import type { Band } from "@sylox/sdk";
 
 const CONTRACT_TAG_TO_BAND_NAME: Record<Band["tag"], RiskBandName> = {
   Normal: "normal",

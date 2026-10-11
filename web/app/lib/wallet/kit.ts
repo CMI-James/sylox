@@ -1,4 +1,6 @@
-import { NETWORK_PASSPHRASE } from "@/lib/contracts/deployment";
+import { Networks } from "@sylox/sdk";
+
+const NETWORK_PASSPHRASE = Networks.Testnet.networkPassphrase;
 
 /**
  * The Stellar Wallets Kit bundles its OWN @stellar/stellar-sdk, which
