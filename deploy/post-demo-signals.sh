@@ -238,10 +238,46 @@ post_sub_epochs() {
 # attempt often just succeeds; the latter never will on a retry and
 # should fail the same sub-epoch (and this run) immediately, same as
 # before.
+#
+# Narrow on purpose, matching only strings actually observed from this
+# exact stellar-cli version, each noted below with where it was seen -
+# a bare "client error" or "timeout" substring is too wide (it would
+# also match inside a real rejection's own error text in some other,
+# not-yet-seen case) and the old version matched on that wider basis;
+# narrowed here to the specific messages, not the general shape.
+#
+#   "transaction submission timeout"     - deploy/demo-asset-trigger.sh,
+#                                           posting the triggering signal
+#                                           for DEMOUSD (this session).
+#   "error reading a body from connection" - the local --live stopgap
+#                                           loop, posting USDC sub-epochs
+#                                           (this session).
+#   "client error (SendRequest)"         - the local --live stopgap
+#                                           loop, same run as above.
+#   "client error (Connect)"             - the local --live stopgap
+#                                           loop, a separate occurrence.
+#   "txBadSeq"                            - not yet observed in this
+#                                           project directly, but the
+#                                           standard Stellar transaction
+#                                           result code for exactly the
+#                                           sequence-number clash the
+#                                           engineer's own review
+#                                           anticipated (two posters on
+#                                           one keeper account).
+#
+# Hard guard, checked FIRST and unconditionally: an actual contract
+# error ("Error(Contract," - the SAME prefix is_already_posted_error
+# already matches against #103/#115) is NEVER transient, regardless
+# of whatever else its own text happens to contain - a contract
+# rejection is a real, deterministic answer from the chain, not a
+# network hiccup, and retrying it only wastes a round trip before
+# failing the same way again.
 is_transient_error() {
-  [[ "$1" == *"timeout"* \
+  [[ "$1" == *"Error(Contract,"* ]] && return 1
+  [[ "$1" == *"transaction submission timeout"* \
      || "$1" == *"error reading a body from connection"* \
-     || "$1" == *"client error"* \
+     || "$1" == *"client error (SendRequest)"* \
+     || "$1" == *"client error (Connect)"* \
      || "$1" == *"txBadSeq"* ]]
 }
 
@@ -284,7 +320,13 @@ post_one_sub_epoch() {
       return 0
     fi
     if (( attempt == 1 )) && is_transient_error "$out"; then
-      continue   # One retry, immediately - no sleep: the next scheduled tick is the real backstop if this attempt fails too.
+      # Review finding: a retry with NO pause on a timeout or a
+      # sequence-number clash usually just hits the same condition
+      # again (the RPC endpoint is still recovering, or the other
+      # poster's transaction hasn't settled yet) - a short pause gives
+      # the actual cause a real chance to clear before trying again.
+      sleep 3
+      continue
     fi
     break
   done
@@ -378,6 +420,20 @@ run_live_mode() {
   done
 
   log "live: posted $posted sub-epoch(s) [${posted_list% }], skipped $skipped already-posted [${skipped_list% }], deferred $deferred [${deferred_list% }]"
+
+  # Review finding: a pass that posts NOTHING new but defers at least
+  # one sub-epoch is a different situation from a quiet, healthy pass
+  # (nothing to do but skips) or a pass that posted normally - it means
+  # every attempt this run made hit a transient failure that survived
+  # its own retry too. Exiting 1 here makes a sustained RPC outage show
+  # up as a crashed run on Railway, instead of hiding behind a clean-
+  # looking "deferred N" line in an otherwise-successful-exit-code log.
+  # A run with only skips (posted == 0, deferred == 0: nothing NEW to
+  # post at all) still exits 0 - that is the normal, expected case on
+  # most 5-minute ticks.
+  if (( posted == 0 && deferred > 0 )); then
+    exit 1
+  fi
 }
 
 if (( LIVE_MODE )); then
