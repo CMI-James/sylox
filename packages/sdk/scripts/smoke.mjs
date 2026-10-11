@@ -83,7 +83,21 @@ async function main() {
   console.log("\n== simulate finalize(0) - expecting WrongState (206) ==");
   try {
     const { prepareFinalize } = await import("../dist/events/actions.js");
-    await prepareFinalize(Networks.Testnet, EVENT_ID, "GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP");
+    // PR #69 review, required fix #2: prepare* now takes the full
+    // Signer (needed so a genuine restore mid-prepare can actually
+    // sign/submit - see events/restore.ts), not a bare address string.
+    // This smoke run never reaches that path (event 0 is expected to
+    // already be past finalize-able state, a plain simulation error,
+    // not an archived-entry restore), so a signTransaction that throws
+    // if ever actually invoked is enough to prove the call shape without
+    // needing a real wallet here.
+    const stubSigner = {
+      publicKey: "GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP",
+      signTransaction: async () => {
+        throw new Error("smoke.mjs: signTransaction should not be called for this deterministic WrongState case.");
+      },
+    };
+    await prepareFinalize(Networks.Testnet, EVENT_ID, stubSigner);
     console.log("UNEXPECTED: prepareFinalize did not throw.");
     process.exitCode = 1;
   } catch (e) {

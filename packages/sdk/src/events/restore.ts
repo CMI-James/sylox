@@ -33,6 +33,27 @@ import { SyloxError } from "../errors.js";
  * verification, noted explicitly in the PR description: the TYPE-LEVEL
  * mechanism and control flow are real and type-checked, the live
  * restore-and-resubmit path itself is unexercised by the smoke test.
+ *
+ * PR #69 review, required fix #2: `tx.restoreFootprint(...)` below
+ * signs and submits its OWN transaction, separate from the caller's
+ * original write - and @stellar/stellar-sdk's AssembledTransaction
+ * requires `signTransaction` to have been supplied when the Client that
+ * built `tx` was CONSTRUCTED, not merely by the time a later
+ * `signAndSend` call provides one (confirmed directly against
+ * restoreFootprint's own doc comment: "A signTransaction function must
+ * be provided during the Client initialization" / "Throws an error if
+ * no signTransaction function is provided during Client
+ * initialization"). Previously, every prepare* in actions.ts built its
+ * client from a bare `address: string` with no signer at all, so this
+ * function's `await tx.restoreFootprint(...)` call below would have
+ * thrown that exact error the first time a real restore was ever
+ * needed - the mechanism was real and type-checked, as the paragraph
+ * above says, but NOT actually reachable end-to-end. Fixed by having
+ * every prepare* accept the full `Signer` and pass it into
+ * eventRegistryClient (contracts/event-registry.ts), which now wires
+ * `signTransaction` into the Client at construction time - so by the
+ * time this function runs, `tx` already carries a working signer and
+ * `restoreFootprint` can actually sign and submit.
  */
 export interface RestoreNeeded {
   /** The minimum resource fee stellar-sdk computed for the restore transaction. */

@@ -90,28 +90,28 @@ class EventsNamespace extends Events {
   /** Section 19.6: `al.events.proposeTier1(arsSac, "Depeg")` - uses the canonical Depeg definition, prepares, simulates, and signs+sends in one call via the instance's own signer. */
   async proposeTier1(asset: string, kind: EventKind["tag"], options: PrepareOptions = {}): Promise<WriteResult<bigint>> {
     const signer = this.requireSigner("proposeTier1");
-    const prepared = await prepareProposeTier1(this.network, asset, kind, signer.publicKey, options);
+    const prepared = await prepareProposeTier1(this.network, asset, kind, signer, options);
     return confirmProposeTier1(prepared, signer);
   }
 
   /** Section 19.6: `al.events.challenge(eventId, evidenceHash)` - bond locked in Staking, escalates at once. */
   async challenge(eventId: bigint, evidenceHash: Uint8Array, options: PrepareOptions = {}): Promise<WriteResult<void>> {
     const signer = this.requireSigner("challenge");
-    const prepared = await prepareChallenge(this.network, eventId, evidenceHash, signer.publicKey, options);
+    const prepared = await prepareChallenge(this.network, eventId, evidenceHash, signer, options);
     return confirmChallenge(prepared, signer);
   }
 
   /** Simulates and, if it would succeed, signs+sends `finalize(eventId)` via the instance's own signer. Throws SyloxError (never signing) if simulation would fail. */
   async finalize(eventId: bigint, options: PrepareOptions = {}): Promise<WriteResult<void>> {
     const signer = this.requireSigner("finalize");
-    const prepared = await prepareFinalize(this.network, eventId, signer.publicKey, options);
+    const prepared = await prepareFinalize(this.network, eventId, signer, options);
     return confirmFinalize(prepared, signer);
   }
 
   /** Simulates and, if it would succeed, signs+sends `checkpoint_cure(eventId)` via the instance's own signer. */
   async checkpointCure(eventId: bigint, options: PrepareOptions = {}): Promise<WriteResult<CureProgress>> {
     const signer = this.requireSigner("checkpointCure");
-    const prepared = await prepareCheckpointCure(this.network, eventId, signer.publicKey, options);
+    const prepared = await prepareCheckpointCure(this.network, eventId, signer, options);
     return confirmCheckpointCure(prepared, signer);
   }
 }

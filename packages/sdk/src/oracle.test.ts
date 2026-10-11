@@ -33,6 +33,10 @@ const NETWORK: SyloxNetwork = {
   rpcUrl: "https://fake-rpc.example",
   networkPassphrase: "Test SDF Network ; September 2015",
   contracts: { riskOracle: "CFAKE_ORACLE", eventRegistry: "CFAKE_REGISTRY" },
+  // demoAsset is required on SyloxNetwork (both deployment source files
+  // are committed - see networks.ts's doc comment) but unused by any
+  // test in this file; a minimal well-shaped fixture satisfies the type.
+  demoAsset: { contract_id: "CFAKE_DEMO_ASSET", asset_code: "DEMOUSD", issuer: "GFAKE_ISSUER" },
 };
 
 const ASSET = "CFAKE_ASSET";

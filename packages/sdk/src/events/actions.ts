@@ -20,6 +20,23 @@ import { maybeRestore, type OnRestoreNeeded } from "./restore.js";
  * `proposeTier1` and `challenge` are NEW (Section 19.6) - they don't
  * exist anywhere in the codebase yet, written here following the exact
  * same prepare/confirm pattern as finalize/checkpointCure.
+ *
+ * PR #69 review, required fix #2: every prepare* below now takes the
+ * full `signer: Signer`, not a bare `address: string`. Previously,
+ * `eventRegistryClient(network, address)` built a Client with no
+ * `signTransaction` at all, so when `maybeRestore` (events/restore.ts)
+ * ran against that prepared transaction and simulation genuinely
+ * reported an archived entry needing restore, `tx.restoreFootprint(...)`
+ * would throw "no signTransaction function provided during Client
+ * initialization" - @stellar/stellar-sdk requires signTransaction at
+ * CONSTRUCTION time specifically for restoreFootprint, not merely by
+ * the time signAndSend runs later in confirm*. The whole point of
+ * Section 19.7's "the SDK builds and submits a restore transaction
+ * first" was defeated by that gap: restore could never actually
+ * happen, only the type-level plumbing existed. Passing the real
+ * signer into eventRegistryClient here means the built-and-simulated
+ * transaction already carries a working signTransaction, so a genuine
+ * restore mid-prepare can actually sign and submit.
  */
 
 export interface WriteResult<T> {
@@ -30,7 +47,7 @@ export interface WriteResult<T> {
 
 /**
  * A prepared transaction, tagged with the address it was simulated
- * for. eventRegistryClient(network, publicKey) bakes that address into
+ * for. eventRegistryClient(network, signer) bakes that address into
  * the built transaction's own source account at construction time, so
  * a transaction built for one address can never be signed and sent by
  * another - confirm* checks `preparedFor` against the signer it's
@@ -50,16 +67,16 @@ export interface PrepareOptions {
 export async function prepareCheckpointCure(
   network: SyloxNetwork,
   eventId: bigint,
-  address: string,
+  signer: Signer,
   options: PrepareOptions = {},
 ): Promise<Prepared<Awaited<ReturnType<ReturnType<typeof eventRegistryClient>["checkpoint_cure"]>>>> {
-  const registry = eventRegistryClient(network, address);
+  const registry = eventRegistryClient(network, signer);
   const tx = await registry.checkpoint_cure({ event_id: eventId });
   await maybeRestore(tx, options.onRestoreNeeded);
   if (tx.result.isErr()) {
     throw checkpointCureError(extractErrorCode(tx));
   }
-  return { tx, preparedFor: address };
+  return { tx, preparedFor: signer.publicKey };
 }
 
 export async function confirmCheckpointCure(
@@ -85,16 +102,16 @@ export async function confirmCheckpointCure(
 export async function prepareFinalize(
   network: SyloxNetwork,
   eventId: bigint,
-  address: string,
+  signer: Signer,
   options: PrepareOptions = {},
 ): Promise<Prepared<Awaited<ReturnType<ReturnType<typeof eventRegistryClient>["finalize"]>>>> {
-  const registry = eventRegistryClient(network, address);
+  const registry = eventRegistryClient(network, signer);
   const tx = await registry.finalize({ event_id: eventId });
   await maybeRestore(tx, options.onRestoreNeeded);
   if (tx.result.isErr()) {
     throw finalizeError(extractErrorCode(tx));
   }
-  return { tx, preparedFor: address };
+  return { tx, preparedFor: signer.publicKey };
 }
 
 export async function confirmFinalize(
@@ -137,10 +154,10 @@ export async function prepareProposeTier1(
   network: SyloxNetwork,
   asset: string,
   kind: EventKind["tag"],
-  address: string,
+  signer: Signer,
   options: PrepareOptions = {},
 ): Promise<Prepared<Awaited<ReturnType<ReturnType<typeof eventRegistryClient>["propose_tier1"]>>>> {
-  const registry = eventRegistryClient(network, address);
+  const registry = eventRegistryClient(network, signer);
   const kindArg: EventKind = { tag: kind, values: undefined };
 
   const versionTx = await registry.current_version({ asset, kind: kindArg });
@@ -149,12 +166,12 @@ export async function prepareProposeTier1(
     throw proposeTier1Error(200); // UnknownDefinition - no canonical definition registered for this (asset, kind) yet.
   }
 
-  const tx = await registry.propose_tier1({ caller: address, asset, kind: kindArg, version });
+  const tx = await registry.propose_tier1({ caller: signer.publicKey, asset, kind: kindArg, version });
   await maybeRestore(tx, options.onRestoreNeeded);
   if (tx.result.isErr()) {
     throw proposeTier1Error(extractErrorCode(tx));
   }
-  return { tx, preparedFor: address };
+  return { tx, preparedFor: signer.publicKey };
 }
 
 export async function confirmProposeTier1(
@@ -192,7 +209,7 @@ export async function prepareChallenge(
   network: SyloxNetwork,
   eventId: bigint,
   evidenceHash: Uint8Array,
-  address: string,
+  signer: Signer,
   options: PrepareOptions = {},
 ): Promise<Prepared<Awaited<ReturnType<ReturnType<typeof eventRegistryClient>["challenge"]>>>> {
   if (evidenceHash.length !== 32) {
@@ -201,13 +218,13 @@ export async function prepareChallenge(
       { code: null, contractErrorName: null },
     );
   }
-  const registry = eventRegistryClient(network, address);
-  const tx = await registry.challenge({ challenger: address, event_id: eventId, evidence: evidenceHash });
+  const registry = eventRegistryClient(network, signer);
+  const tx = await registry.challenge({ challenger: signer.publicKey, event_id: eventId, evidence: evidenceHash });
   await maybeRestore(tx, options.onRestoreNeeded);
   if (tx.result.isErr()) {
     throw challengeError(extractErrorCode(tx));
   }
-  return { tx, preparedFor: address };
+  return { tx, preparedFor: signer.publicKey };
 }
 
 export async function confirmChallenge(
