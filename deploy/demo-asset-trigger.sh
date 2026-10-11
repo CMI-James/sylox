@@ -134,6 +134,14 @@ else
 fi
 HOLDER_ADDR="$("$STELLAR_BIN" keys address "$HOLDER")"
 
+# Persisted so anything outside this script's own local CLI identity
+# store (deploy/extend-ttl.sh, run from a container that never created
+# or imported "sylox-demo-holder") can still find the holder's address
+# without deriving it from the identity itself.
+tmp_demo_record="$(mktemp)"
+jq --arg holder "$HOLDER_ADDR" '.demo_asset.holder = $holder' "$DEMO_RECORD" > "$tmp_demo_record"
+mv "$tmp_demo_record" "$DEMO_RECORD"
+
 log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
 # A repeat change-trust to an already-open trustline is a harmless
 # no-op on Stellar (same limit, same flags), so no "already exists"
