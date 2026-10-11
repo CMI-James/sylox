@@ -1,5 +1,9 @@
 # Event 0: the real DEMOUSD IssuerFreeze event
 
+This file covers the event on the PRE-redeploy contracts only. For
+the event on the current (post-redeploy) contracts, see
+`docs/demousd-issuer-freeze-2026-10-11.md`.
+
 Recorded ahead of the testnet redeploy that will ship issue #12
 (`upgrade()`/`version()`/`migrate()`) and, if ready in time, issue #21
 (constructor instead of `initialize`). That redeploy starts

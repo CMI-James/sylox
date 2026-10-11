@@ -40,7 +40,18 @@
 # failed. Fixed by reading the REAL circulating supply from Horizon at
 # the moment of posting (every field below marked "real" is read from
 # the chain, not invented), and by refusing to post at all if the real
-# numbers would not clear the registered threshold (step 5).
+# numbers would not clear the registered threshold (step 6).
+#
+# Review finding (this session, a SECOND real run): the triggering
+# epoch is now the real hour the revoke and clawback transactions
+# actually closed in (floor(created_at/EPOCH_SECS), step 4), never
+# wall-clock "now" at script-run time. The original NEWEST_CLOSED
+# shortcut (floor(now/EPOCH_SECS) - 1) misdated the action: it posts
+# whatever hour is "most recently closed" AT SCRIPT-RUN TIME, which
+# drifts forward if the script resumes later than the actions
+# themselves happened. Each issuer action belongs in the hour it
+# really happened in, not the hour the script happened to be running
+# in afterward.
 #
 # Which fields are real, which are sample:
 #   - peg_ratio, peg_ratio_p10, liquidity_2pct: SAMPLE. DEMOUSD has no
@@ -48,11 +59,19 @@
 #     plausible placeholder values, the same convention deploy/post-
 #     demo-signals.sh uses for USDC's own synthetic backfill.
 #   - supply: REAL. Read from Horizon's asset-stats endpoint
-#     immediately before each post (steps 3 and 5), the actual
+#     immediately before each post (steps 5 and 6), the actual
 #     authorized + authorized_to_maintain_liabilities + unauthorized
 #     balance total for DEMOUSD at that moment.
+#   - supply_change_bps: REAL. Computed from the previous epoch's own
+#     REAL stored supply (read via RiskOracle.signals(), not Horizon -
+#     see read_previous_supply's own comment for why), using
+#     check_supply_change_consistency's exact formula
+#     (contracts/risk-oracle/src/lib.rs). A prior version of this
+#     script hardcoded 0 here, which the contract correctly rejected
+#     once the real supply genuinely moved between the gap-fill hour
+#     and the triggering post (the clawback itself does that).
 #   - clawback_amount, auth_revocations: REAL. The revocation and
-#     clawback in step 4 are genuine Stellar operations against the
+#     clawback in step 3 are genuine Stellar operations against the
 #     holder's own trustline; clawback_amount is read back from the
 #     clawback transaction's own Horizon effects (the amount it
 #     actually moved), never the amount requested.
@@ -60,18 +79,49 @@
 #     stellar.expert-linkable, folded into the posted inputs so anyone
 #     can check the posted numbers against the chain.
 #
-# Usage: deploy/demo-asset-trigger.sh testnet [backfill_hours]
+# Usage: deploy/demo-asset-trigger.sh testnet [backfill_hours] [--dry-run]
 #   backfill_hours: hours of plain DEMOUSD history to post before the
-#                   triggering post, oldest first. Default 3, capped
-#                   at 71 (same bound as post-demo-signals.sh, for the
-#                   same reason).
+#                   gap-fill hour (step 5), oldest first. Default 3,
+#                   capped at 71 (same bound as post-demo-signals.sh,
+#                   for the same reason).
+#   --dry-run: print the resume plan (every step: "already done (tx
+#              ...)" or "will submit") and exit before anything is
+#              signed. Safe to run any number of times; makes no
+#              on-chain calls beyond the same reads a real run would
+#              make anyway.
+#
+# Resumable by design, not just safe to retry: every step below checks
+# the REAL chain state before deciding whether to submit anything, the
+# same principle steps 1/2/3's "already done" guards already used, now
+# extended to the clawback too (previously the one step with no guard
+# at all - see RESUME NOTE below). A rerun against today's real state
+# submits nothing before the triggering post: holder exists and funded
+# (step 1), already minted (step 2), already revoked and already
+# clawed back (step 3, this run's fix), already backfilled and
+# gap-filled (step 5, via post_signals's own #103 EpochAlreadyPosted) -
+# each detected from the chain, not from a local marker file this
+# script could lose or never had reason to trust over the chain
+# itself.
+#
+# RESUME NOTE: a rerun's own CLAWBACK_REQUEST (half of whatever the
+# holder holds RIGHT NOW) must never be computed, let alone submitted,
+# once a real clawback already exists for this holder - doing so would
+# claw back half of the REMAINING balance a second time, corrupting
+# the evidence this script exists to produce. find_clawback_tx_hash
+# below looks up the real, already-posted clawback from Horizon FIRST;
+# only when none exists does this script compute a request amount and
+# submit anything.
 
 set -uo pipefail
 
 NETWORK="${1:-}"
 BACKFILL_HOURS="${2:-3}"
+DRY_RUN=0
+for arg in "$@"; do
+  [[ "$arg" == "--dry-run" ]] && DRY_RUN=1
+done
 if [[ "$NETWORK" != "testnet" ]]; then
-  echo "usage: $0 testnet [backfill_hours]" >&2
+  echo "usage: $0 testnet [backfill_hours] [--dry-run]" >&2
   exit 1
 fi
 if ! [[ "$BACKFILL_HOURS" =~ ^[0-9]+$ ]] || (( BACKFILL_HOURS < 1 || BACKFILL_HOURS > 71 )); then
@@ -87,6 +137,7 @@ DEMO_RECORD="$REPO_ROOT/deployments/testnet-demo-asset.json"
 
 STELLAR_BIN="${STELLAR_CLI_BIN:-stellar}"
 EPOCH_SECS=3600
+WINDOW_SECS=259200   # contracts/risk-oracle/src/lib.rs's own WINDOW_SECS: 72 hours, the backfill reach check_epoch_window enforces.
 HORIZON_URL="https://horizon-testnet.stellar.org"
 
 RO_ID="$(jq -r '.contracts.risk_oracle.id' "$RECORD")"
@@ -216,6 +267,88 @@ find_revoke_tx_hash() {
   echo "$tx_hash"
 }
 
+# The jq half of find_clawback_tx_hash, factored out the same way
+# select_revoke_tx_hash_from_ops is (tested against local JSON samples
+# in deploy/test-demo-asset-trigger-find-clawback.sh, no real Horizon
+# call). A clawback operation's holder-identifying field is `from`,
+# not `trustor` (confirmed against the real clawback operation's own
+# Horizon record: trustor is null, from is the holder) - a clawback
+# is not a trustline operation, so it has no trustor field at all.
+select_clawback_tx_hash_from_ops() {
+  local ops_json="$1" holder="$2" asset_code="$3"
+  echo "$ops_json" | jq -r --arg holder "$holder" --arg code "$asset_code" \
+    '[._embedded.records[] | select(.type == "clawback" and .from == $holder and .asset_code == $code)][0].transaction_hash // empty'
+}
+
+# Finds the real transaction hash AND real amount of `issuer`'s most
+# recent clawback operation against `holder`'s asset_code balance,
+# straight from Horizon. Used to detect "this holder already had a
+# real clawback" BEFORE this script computes or submits a new one -
+# see this file's own RESUME NOTE in its header for why that ordering
+# matters. Returns empty (not a die) when no match is found: unlike a
+# missing revoke (which read_trustline_authorized's own state check
+# already proved must exist once the trustline reads deauthorized),
+# "no clawback yet" is the normal, expected state for the first real
+# run and must not be treated as an error here.
+find_clawback_tx_hash() {
+  local issuer_addr="$1" holder="$2" asset_code="$3"
+  local ops_json
+  ops_json="$(curl -sSf "$HORIZON_URL/accounts/$issuer_addr/operations?order=desc&limit=200" 2>&1)" \
+    || die "could not read $issuer_addr's operations from Horizon: $ops_json"
+  select_clawback_tx_hash_from_ops "$ops_json" "$holder" "$asset_code"
+}
+
+# Real amount moved by a clawback transaction, in stroops, read from
+# ITS OWN account_debited effect - the same technique this script
+# already uses right after submitting a new clawback (step 4), now
+# shared so a resumed run reads the SAME real number from a PRIOR
+# run's clawback instead of recomputing anything.
+read_clawback_amount_stroops() {
+  local tx_hash="$1"
+  local effects decimal
+  effects="$(curl -sSf "$HORIZON_URL/transactions/$tx_hash/effects" 2>&1)" \
+    || die "could not read clawback transaction's effects from Horizon: $effects"
+  decimal="$(echo "$effects" | jq -r '._embedded.records[] | select(.type == "account_debited") | .amount' | head -1)"
+  [[ -n "$decimal" && "$decimal" != "null" ]] || die "could not find the clawback's own account_debited effect for $tx_hash"
+  jq -n --arg d "$decimal" '($d|tonumber) * 10000000 | round'
+}
+
+# The pure conversion half of read_tx_epoch, factored out so it can be
+# tested against real ISO-8601 timestamps (deploy/test-demo-asset-
+# trigger-read-tx-epoch.sh) without a real Horizon call. date -u -d
+# (GNU) first, date -u -j -f (BSD) as fallback - same portable pattern
+# deploy/post-demo-signals.sh already uses for the reverse direction.
+created_at_to_epoch() {
+  local created_at="$1"
+  local ts
+  ts="$(date -u -d "$created_at" +%s 2>/dev/null \
+    || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" +%s 2>/dev/null)"
+  [[ "$ts" =~ ^[0-9]+$ ]] || die "could not parse created_at ($created_at) as a date"
+  echo $(( ts / EPOCH_SECS ))
+}
+
+# The epoch an issuer action's own transaction actually closed in:
+# floor(created_at / EPOCH_SECS), read from Horizon's own created_at
+# for that transaction - never the wall clock at the moment this
+# script happens to run. Review finding (this session, a real run):
+# the original NEWEST_CLOSED (floor(now/EPOCH_SECS) - 1) posted the
+# revoke and clawback under whatever hour was "the most recently
+# closed" AT SCRIPT-RUN TIME, which can be a different, later hour
+# than the one the actions actually happened in if the script resumes
+# after a gap (exactly what happened here - run interrupted close to
+# a new hour starting (clawback at 21:14:02, 497709), the resumed dry
+# run's own current hour had already rolled forward by the time this
+# was written).
+read_tx_epoch() {
+  local tx_hash="$1"
+  local tx_json created_at
+  tx_json="$(curl -sSf "$HORIZON_URL/transactions/$tx_hash" 2>&1)" \
+    || die "could not read transaction $tx_hash from Horizon: $tx_json"
+  created_at="$(echo "$tx_json" | jq -r '.created_at')"
+  [[ -n "$created_at" && "$created_at" != "null" ]] || die "transaction $tx_hash has no created_at"
+  created_at_to_epoch "$created_at"
+}
+
 # Real circulating supply for DEMOUSD, in stroops (SCALE 1e7), read
 # fresh from Horizon every time it's needed: authorized +
 # authorized_to_maintain_liabilities + unauthorized balances, the
@@ -238,7 +371,59 @@ read_real_supply() {
 
 LIQUIDITY="500000000"        # 50 units at SCALE 1e7. SAMPLE (see header).
 
-# -- [1/6] Holder identity and trustline -----------------------------
+# Reads epoch - 1's own REAL stored supply via RiskOracle.signals(),
+# not Horizon: check_supply_change_consistency (contracts/risk-oracle/
+# src/lib.rs) compares against storage::get_slot's own previous ring
+# slot, i.e. what THIS asset's own prior post actually recorded, not
+# whatever Horizon reports right now (which can have moved again by
+# posting time, exactly what happened here: the clawback drops the
+# real Horizon supply AFTER the backfill already posted a higher
+# figure for the prior epoch). Echoes empty, not 0 and not a die, when
+# there is no prior slot (epoch 0, or a gap) - epoch 0's own
+# unconditional pass and the "no previous slot" unconditional pass in
+# check_supply_change_consistency are exactly the two cases
+# compute_supply_change_bps below also treats as "no check, 0 is
+# correct by definition", so empty here must mean 0 there, not an
+# error.
+read_previous_supply() {
+  local epoch="$1"
+  if (( epoch == 0 )); then
+    echo ""
+    return
+  fi
+  local previous_epoch=$(( epoch - 1 ))
+  local out
+  out="$(invoke_read "signals(DEMOUSD, $previous_epoch)" --id "$RO_ID" --source-account "$DEMO_ISSUER" \
+    --network testnet --send=no -- signals --asset "$DEMO_ID" --epoch "$previous_epoch")"
+  if [[ "$out" == "null" ]]; then
+    echo ""
+    return
+  fi
+  echo "$out" | jq -r '.supply'
+}
+
+# Copies check_supply_change_consistency's own formula exactly
+# (contracts/risk-oracle/src/lib.rs): ((supply - previous.supply) *
+# 10_000) / previous.supply, i128 division truncating toward zero -
+# confirmed this matches bash's own `$(( ))` integer division
+# (verified by hand: $(( -7 / 2 )) is -3, the same truncate-toward-
+# zero Rust's i128 division uses, not Python's floor -4). Returns "0"
+# when there is no previous slot to compare against (read_
+# previous_supply returns empty for epoch 0 or a missing prior post) -
+# the contract's own two unconditional-pass cases, where ANY posted
+# supply_change_bps is accepted, so posting the true, unconstrained
+# value of 0 is correct, not a placeholder.
+compute_supply_change_bps() {
+  local supply="$1" previous_supply="$2"
+  if [[ -z "$previous_supply" ]]; then
+    echo "0"
+    return
+  fi
+  (( previous_supply != 0 )) || { echo "0"; return; }   # Same zero-previous-supply skip check_supply_change_consistency itself makes.
+  echo $(( (supply - previous_supply) * 10000 / previous_supply ))
+}
+
+# -- [1/7] Holder identity and trustline -----------------------------
 #
 # sylox-demo-holder-2, not the original sylox-demo-holder: that first
 # holder's own trustline is permanently deauthorized (the real event-0
@@ -251,32 +436,79 @@ LIQUIDITY="500000000"        # 50 units at SCALE 1e7. SAMPLE (see header).
 # holder. This script's own header already says a reset means a fresh
 # holder, not a re-run against the same one.
 
-log "[1/6] DEMOUSD holder identity"
+# plan() prints one line of the dry-run/resume plan, in the exact
+# format the PR's own dry-run evidence uses: "already done (tx ...)"
+# or "will submit (...)". Always printed, dry-run or not, so a real
+# run's own log carries the same plan a --dry-run would have shown,
+# right before actually doing it.
+plan() {
+  local label="$1" status="$2" detail="${3:-}"
+  if [[ -n "$detail" ]]; then
+    log "[plan] $label: $status ($detail)"
+  else
+    log "[plan] $label: $status"
+  fi
+}
+
+log "[1/7] DEMOUSD holder identity"
 HOLDER=sylox-demo-holder-2
-if "$STELLAR_BIN" keys address "$HOLDER" >/dev/null 2>&1; then
-  log "identity $HOLDER already exists"
+HOLDER_EXISTS=0
+"$STELLAR_BIN" keys address "$HOLDER" >/dev/null 2>&1 && HOLDER_EXISTS=1
+
+if (( HOLDER_EXISTS )); then
+  plan "holder identity ($HOLDER)" "already done" "$("$STELLAR_BIN" keys address "$HOLDER")"
 else
-  "$STELLAR_BIN" keys generate "$HOLDER" --network testnet --fund
-  log "identity $HOLDER created and funded"
+  plan "holder identity ($HOLDER)" "will submit" "friendbot funding"
+  (( DRY_RUN )) || { "$STELLAR_BIN" keys generate "$HOLDER" --network testnet --fund; log "identity $HOLDER created and funded"; }
 fi
-HOLDER_ADDR="$("$STELLAR_BIN" keys address "$HOLDER")"
+# In dry-run, a holder that does not exist yet has no address to check
+# a trustline against - every check from here on on an as-yet-
+# nonexistent holder reports "cannot check yet", not a false "will
+# submit", since this script genuinely cannot know a fresh holder's
+# eventual trustline/balance/clawback state before it exists.
+HOLDER_ADDR="$("$STELLAR_BIN" keys address "$HOLDER" 2>/dev/null || true)"
+if [[ -z "$HOLDER_ADDR" ]]; then
+  (( DRY_RUN )) || die "could not read $HOLDER's address after creating it"
+fi
 
-# Persisted so anything outside this script's own local CLI identity
-# store (deploy/extend-ttl.sh, run from a container that never created
-# or imported "sylox-demo-holder-2") can still find the holder's
-# address without deriving it from the identity itself.
-tmp_demo_record="$(mktemp)"
-jq --arg holder "$HOLDER_ADDR" '.demo_asset.holder = $holder' "$DEMO_RECORD" > "$tmp_demo_record"
-mv "$tmp_demo_record" "$DEMO_RECORD"
+if [[ -n "$HOLDER_ADDR" ]]; then
+  # Persisted so anything outside this script's own local CLI identity
+  # store (deploy/extend-ttl.sh, run from a container that never
+  # created or imported "sylox-demo-holder-2") can still find the
+  # holder's address without deriving it from the identity itself.
+  # Skipped in dry-run: writing this file is a local side effect a
+  # dry-run should not perform either.
+  if (( ! DRY_RUN )); then
+    tmp_demo_record="$(mktemp)"
+    jq --arg holder "$HOLDER_ADDR" '.demo_asset.holder = $holder' "$DEMO_RECORD" > "$tmp_demo_record"
+    mv "$tmp_demo_record" "$DEMO_RECORD"
+  fi
 
-log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
-# A repeat change-trust to an already-open trustline is a harmless
-# no-op on Stellar (same limit, same flags), so no "already exists"
-# branch is needed here, unlike the SAC/asset-registration steps.
-"$STELLAR_BIN" tx new change-trust --source-account "$HOLDER" \
-  --line "$DEMO_CODE:$DEMO_ISSUER_ADDR" --network testnet >/dev/null
+  HOLDER_TRUSTLINE_EXISTS=0
+  account_json_step1="$(curl -sSf "$HORIZON_URL/accounts/$HOLDER_ADDR" 2>&1)" || account_json_step1=""
+  if [[ -n "$account_json_step1" ]] && echo "$account_json_step1" | jq -e --arg code "$DEMO_CODE" --arg issuer "$DEMO_ISSUER_ADDR" \
+      '.balances[]? | select(.asset_code == $code and .asset_issuer == $issuer)' >/dev/null 2>&1; then
+    HOLDER_TRUSTLINE_EXISTS=1
+  fi
+  if (( HOLDER_TRUSTLINE_EXISTS )); then
+    plan "trustline ($DEMO_CODE)" "already done"
+  else
+    plan "trustline ($DEMO_CODE)" "will submit" "change-trust"
+  fi
+  if (( ! DRY_RUN )); then
+    log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
+    # A repeat change-trust to an already-open trustline is a harmless
+    # no-op on Stellar (same limit, same flags), so no "already
+    # exists" branch is needed here, unlike the SAC/asset-registration
+    # steps.
+    "$STELLAR_BIN" tx new change-trust --source-account "$HOLDER" \
+      --line "$DEMO_CODE:$DEMO_ISSUER_ADDR" --network testnet >/dev/null
+  fi
+else
+  plan "trustline ($DEMO_CODE)" "cannot check yet" "holder identity does not exist locally"
+fi
 
-# -- [2/6] Issue the holder some DEMOUSD, ONCE ------------------------
+# -- [2/7] Issue the holder some DEMOUSD, ONCE ------------------------
 #
 # Review finding (this session): an earlier version of this script
 # minted on every run with no "already done" check, unlike every
@@ -286,50 +518,29 @@ log "Opening $HOLDER's trustline to $DEMO_CODE:$DEMO_ISSUER_ADDR"
 # assumed. Guarded now: mint only if the holder's real balance (read
 # from the chain, not assumed) is still zero.
 
-log "[2/6] DEMOUSD balance for $HOLDER_ADDR"
-holder_balance_before_raw="$(invoke_read "$HOLDER_ADDR's DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-  --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
-holder_balance_before="$(parse_i128 "$holder_balance_before_raw" "$HOLDER_ADDR's DEMOUSD balance")"
-if (( holder_balance_before > 0 )); then
-  log "$HOLDER_ADDR already holds $holder_balance_before stroops of DEMOUSD; not minting again"
+log "[2/7] DEMOUSD balance for $HOLDER_ADDR"
+if [[ -z "$HOLDER_ADDR" ]]; then
+  plan "mint" "cannot check yet" "holder identity does not exist locally"
 else
-  HOLDER_BALANCE=1000000000   # 100 units at SCALE 1e7, arbitrary plausible size, enough to partially clawback.
-  log "Issuing $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
-  "$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-    --network testnet -- mint --to "$HOLDER_ADDR" --amount "$HOLDER_BALANCE" >/dev/null
-  log "minted $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
+  holder_balance_before_raw="$(invoke_read "$HOLDER_ADDR's DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+    --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
+  holder_balance_before="$(parse_i128 "$holder_balance_before_raw" "$HOLDER_ADDR's DEMOUSD balance")"
+  if (( holder_balance_before > 0 )); then
+    plan "mint" "already done" "$holder_balance_before stroops already held"
+    log "$HOLDER_ADDR already holds $holder_balance_before stroops of DEMOUSD; not minting again"
+  else
+    plan "mint" "will submit" "1000000000 stroops"
+    if (( ! DRY_RUN )); then
+      HOLDER_BALANCE=1000000000   # 100 units at SCALE 1e7, arbitrary plausible size, enough to partially clawback.
+      log "Issuing $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
+      "$STELLAR_BIN" contract invoke --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+        --network testnet -- mint --to "$HOLDER_ADDR" --amount "$HOLDER_BALANCE" >/dev/null
+      log "minted $HOLDER_BALANCE DEMOUSD to $HOLDER_ADDR"
+    fi
+  fi
 fi
 
-# -- [3/6] Backfill plain DEMOUSD history (oldest first) -------------
-#
-# No real issuer action in these hours: just the REAL current supply
-# (read fresh per post, since mint/clawback can change it between
-# posts) and a SAMPLE liquidity figure, so check_issuer_freeze's own
-# latest_supply has something real to read even on the triggering
-# epoch itself (clawback_sum / latest_supply).
-
-log "[3/6] Backfilling $BACKFILL_HOURS hour(s) of plain DEMOUSD history"
-NOW="$(date +%s)"
-NEWEST_CLOSED=$(( NOW / EPOCH_SECS - 1 ))
-FIRST_EPOCH=$(( NEWEST_CLOSED - BACKFILL_HOURS ))   # Leaves the newest closed hour for the triggering post itself.
-
-for (( epoch = FIRST_EPOCH; epoch < NEWEST_CLOSED; epoch++ )); do
-  supply_now="$(read_real_supply)"
-  inputs_hash="$(printf 'demo-asset-backfill:%s:%s' "$epoch" "$supply_now" | shasum -a 256 | cut -d' ' -f1)"
-  signal_set="{\"epoch\":$epoch,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"9998000\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$supply_now\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
-  if ! post_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
-    post_signals --keeper "$KEEPER_ADDR" --asset "$DEMO_ID" --s "$signal_set" 2>&1)"; then
-    if [[ "$post_out" == *"Error(Contract, #103)"* ]]; then
-      log "epoch $epoch already posted; skipping"
-      continue
-    fi
-    die "post_signals(DEMOUSD, $epoch) failed:
-$post_out"
-  fi
-  log "epoch $epoch posted (plain history, real supply=$supply_now)"
-done
-
-# -- [4/6] The real revocation and clawback --------------------------
+# -- [3/7] The real revocation and clawback --------------------------
 #
 # Real on-chain transactions against the holder's own trustline, from
 # the issuer: this is what makes the event genuine, not a posted
@@ -338,75 +549,249 @@ done
 # protocol requirement, not a Sylox one), so the clawback below is
 # valid. CLAWBACK_REQUEST is what this script ASKS to claw back
 # (bounded by the holder's own real balance, read above); the amount
-# actually posted in step 5 is read back from the transaction's own
+# actually posted in step 7 is read back from the transaction's own
 # Horizon effects, not this requested figure, in case the two ever
 # differ (they should not, for a single whole clawback, but the posted
 # number must be the real one regardless).
+#
+# Moved ahead of the backfill (previously step 3, now step 5): the
+# backfill's own range now depends on TRIGGER_EPOCH (step 4), which in
+# turn depends on these two transactions actually existing.
 
-holder_balance_now_raw="$(invoke_read "$HOLDER_ADDR's real DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
-  --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
-holder_balance_now="$(parse_i128 "$holder_balance_now_raw" "$HOLDER_ADDR's real DEMOUSD balance")"
-CLAWBACK_REQUEST=$(( holder_balance_now / 2 ))   # Half of whatever the holder really holds right now.
-(( CLAWBACK_REQUEST > 0 )) || die "$HOLDER_ADDR holds $holder_balance_now stroops of DEMOUSD; nothing to claw back"
-
-log "[4/6] Revoking $HOLDER_ADDR's authorization for $DEMO_CODE"
-# Checked by real state, not assumed: a fresh holder's trustline reads
-# "true" here (change-trust alone does not revoke anything); only a
-# PRIOR run of this same script (interrupted after revoking but before
-# the clawback) would ever find "false" already. Either is a known,
-# safe-to-continue state; anything else (e.g. the account not holding
-# this trustline at all) is a real problem, not something to paper
-# over by calling set-trustline-flags regardless.
-already_authorized="$(read_trustline_authorized "$HOLDER_ADDR" "$DEMO_CODE" "$DEMO_ISSUER_ADDR")"
-case "$already_authorized" in
-  true)
-    if ! revoke_out="$("$STELLAR_BIN" tx new set-trustline-flags --source-account "$DEMO_ISSUER" --network testnet \
-      --trustor "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --clear-authorize 2>&1)"; then
-      die "revoking $HOLDER_ADDR's authorization failed:
+log "[3/7] Revoking $HOLDER_ADDR's authorization for $DEMO_CODE"
+if [[ -z "$HOLDER_ADDR" ]]; then
+  plan "revoke" "cannot check yet" "holder identity does not exist locally"
+  plan "clawback" "cannot check yet" "holder identity does not exist locally"
+else
+  # Checked by real state, not assumed: a fresh holder's trustline
+  # reads "true" here (change-trust alone does not revoke anything);
+  # only a PRIOR run of this same script (interrupted after revoking
+  # but before the clawback) would ever find "false" already. Either
+  # is a known, safe-to-continue state; anything else (e.g. the
+  # account not holding this trustline at all) is a real problem, not
+  # something to paper over by calling set-trustline-flags regardless.
+  already_authorized="$(read_trustline_authorized "$HOLDER_ADDR" "$DEMO_CODE" "$DEMO_ISSUER_ADDR")"
+  case "$already_authorized" in
+    true)
+      plan "revoke" "will submit"
+      if (( ! DRY_RUN )); then
+        if ! revoke_out="$("$STELLAR_BIN" tx new set-trustline-flags --source-account "$DEMO_ISSUER" --network testnet \
+          --trustor "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --clear-authorize 2>&1)"; then
+          die "revoking $HOLDER_ADDR's authorization failed:
 $revoke_out"
-    fi
-    echo "$revoke_out"
-    REVOKE_TX_HASH="$(echo "$revoke_out" | grep -oE '[a-f0-9]{64}' | head -1)"
-    log "revocation transaction: $REVOKE_TX_HASH"
-    ;;
-  false)
-    log "$HOLDER_ADDR's trustline is already deauthorized (a prior run of this script got this far); not revoking again"
-    REVOKE_TX_HASH="$(find_revoke_tx_hash "$DEMO_ISSUER_ADDR" "$HOLDER_ADDR" "$DEMO_CODE")"
-    log "found the real revoke transaction from a prior run: $REVOKE_TX_HASH"
-    ;;
-  *)
-    die "$HOLDER_ADDR's $DEMO_CODE trustline authorization read as an unexpected value: $already_authorized"
-    ;;
-esac
+        fi
+        echo "$revoke_out"
+        REVOKE_TX_HASH="$(echo "$revoke_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+        log "revocation transaction: $REVOKE_TX_HASH"
+      fi
+      ;;
+    false)
+      REVOKE_TX_HASH="$(find_revoke_tx_hash "$DEMO_ISSUER_ADDR" "$HOLDER_ADDR" "$DEMO_CODE")"
+      plan "revoke" "already done" "$REVOKE_TX_HASH"
+      log "$HOLDER_ADDR's trustline is already deauthorized (a prior run of this script got this far); not revoking again"
+      log "found the real revoke transaction from a prior run: $REVOKE_TX_HASH"
+      ;;
+    *)
+      die "$HOLDER_ADDR's $DEMO_CODE trustline authorization read as an unexpected value: $already_authorized"
+      ;;
+  esac
 
-log "Clawing back $CLAWBACK_REQUEST (of $holder_balance_now held) from $HOLDER_ADDR"
-if ! clawback_out="$("$STELLAR_BIN" tx new clawback --source-account "$DEMO_ISSUER" --network testnet \
-  --from "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --amount "$CLAWBACK_REQUEST" 2>&1)"; then
-  die "clawback from $HOLDER_ADDR failed:
+  # RESUME NOTE (this file's own header): checked BEFORE computing any
+  # clawback request amount, not after - a rerun's own "half of
+  # whatever the holder holds right now" must never even be computed
+  # once a real clawback already exists, since the holder's current
+  # balance already reflects that prior clawback and halving it again
+  # would be a SECOND real clawback, not a no-op. find_clawback_tx_hash
+  # returns empty (not a die) when none exists - that is the normal,
+  # expected state on a genuinely first run.
+  EXISTING_CLAWBACK_TX_HASH="$(find_clawback_tx_hash "$DEMO_ISSUER_ADDR" "$HOLDER_ADDR" "$DEMO_CODE")"
+  if [[ -n "$EXISTING_CLAWBACK_TX_HASH" ]]; then
+    CLAWBACK_TX_HASH="$EXISTING_CLAWBACK_TX_HASH"
+    CLAWBACK_AMOUNT="$(read_clawback_amount_stroops "$CLAWBACK_TX_HASH")"
+    plan "clawback" "already done" "$CLAWBACK_TX_HASH, $CLAWBACK_AMOUNT stroops"
+    log "$HOLDER_ADDR already has a real clawback from a prior run; not clawing back again"
+    log "found the real clawback transaction from a prior run: $CLAWBACK_TX_HASH ($CLAWBACK_AMOUNT stroops)"
+  else
+    holder_balance_now_raw="$(invoke_read "$HOLDER_ADDR's real DEMOUSD balance" --id "$DEMO_ID" --source-account "$DEMO_ISSUER" \
+      --network testnet --send=no -- balance --id "$HOLDER_ADDR")"
+    holder_balance_now="$(parse_i128 "$holder_balance_now_raw" "$HOLDER_ADDR's real DEMOUSD balance")"
+    CLAWBACK_REQUEST=$(( holder_balance_now / 2 ))   # Half of whatever the holder really holds right now.
+    (( CLAWBACK_REQUEST > 0 )) || die "$HOLDER_ADDR holds $holder_balance_now stroops of DEMOUSD; nothing to claw back"
+    plan "clawback" "will submit" "$CLAWBACK_REQUEST of $holder_balance_now stroops held"
+
+    if (( ! DRY_RUN )); then
+      log "Clawing back $CLAWBACK_REQUEST (of $holder_balance_now held) from $HOLDER_ADDR"
+      if ! clawback_out="$("$STELLAR_BIN" tx new clawback --source-account "$DEMO_ISSUER" --network testnet \
+        --from "$HOLDER_ADDR" --asset "$DEMO_CODE:$DEMO_ISSUER_ADDR" --amount "$CLAWBACK_REQUEST" 2>&1)"; then
+        die "clawback from $HOLDER_ADDR failed:
 $clawback_out"
+      fi
+      echo "$clawback_out"
+      CLAWBACK_TX_HASH="$(echo "$clawback_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+      log "clawback transaction: $CLAWBACK_TX_HASH"
+
+      # Read the REAL amount moved from Horizon's own effects for this
+      # transaction, not CLAWBACK_REQUEST: that is what was asked for,
+      # this is what the chain actually recorded.
+      CLAWBACK_AMOUNT="$(read_clawback_amount_stroops "$CLAWBACK_TX_HASH")"
+      log "real clawback amount, from Horizon's own effects: $CLAWBACK_AMOUNT stroops"
+    fi
+  fi
 fi
-echo "$clawback_out"
-CLAWBACK_TX_HASH="$(echo "$clawback_out" | grep -oE '[a-f0-9]{64}' | head -1)"
-log "clawback transaction: $CLAWBACK_TX_HASH"
 
-# Read the REAL amount moved from Horizon's own effects for this
-# transaction, not CLAWBACK_REQUEST: that is what was asked for, this
-# is what the chain actually recorded.
-clawback_effects="$(curl -sSf "$HORIZON_URL/transactions/$CLAWBACK_TX_HASH/effects" 2>&1)" \
-  || die "could not read clawback transaction's effects from Horizon: $clawback_effects"
-CLAWBACK_AMOUNT_DECIMAL="$(echo "$clawback_effects" | jq -r '._embedded.records[] | select(.type == "account_debited") | .amount' | head -1)"
-[[ -n "$CLAWBACK_AMOUNT_DECIMAL" && "$CLAWBACK_AMOUNT_DECIMAL" != "null" ]] || die "could not find the clawback's own account_debited effect for $CLAWBACK_TX_HASH"
-CLAWBACK_AMOUNT="$(jq -n --arg d "$CLAWBACK_AMOUNT_DECIMAL" '($d|tonumber) * 10000000 | round')"
-log "real clawback amount, from Horizon's own effects: $CLAWBACK_AMOUNT_DECIMAL $DEMO_CODE ($CLAWBACK_AMOUNT stroops)"
+# -- [4/7] Derive the triggering epoch from the real actions ---------
+#
+# Review finding (this session, a real run): the original
+# NEWEST_CLOSED (floor(now/EPOCH_SECS) - 1) posted under whatever hour
+# was "the most recently closed" AT SCRIPT-RUN TIME, not the hour the
+# revoke and clawback actually happened in. Each issuer action is
+# posted in the hour its OWN transaction closed in
+# (floor(created_at/EPOCH_SECS)), once that hour has actually closed -
+# never the hour before it, and never wall-clock "now". If a rerun
+# happens well after the actions (e.g. this script resumes the next
+# day), TRIGGER_EPOCH still pins to when the actions really happened,
+# not to whatever hour is current when this runs.
+#
+# The revoke and clawback must agree on their own hour: this script
+# posts ONE signal_set for both actions together, so if they
+# genuinely straddled an hour boundary, there is no single epoch that
+# correctly represents both and this script has no business guessing
+# which one to use.
 
-# -- [5/6] Refuse to post if the real numbers would not actually trigger --
+if [[ -z "${REVOKE_TX_HASH:-}" || -z "${CLAWBACK_TX_HASH:-}" ]]; then
+  log "[4/7] Cannot derive the triggering epoch yet: holder identity does not exist locally (dry run on a fresh setup)"
+  TRIGGER_EPOCH=""
+else
+  revoke_epoch="$(read_tx_epoch "$REVOKE_TX_HASH")"
+  clawback_epoch="$(read_tx_epoch "$CLAWBACK_TX_HASH")"
+  if [[ "$revoke_epoch" != "$clawback_epoch" ]]; then
+    die "the revoke ($REVOKE_TX_HASH, epoch $revoke_epoch) and the clawback ($CLAWBACK_TX_HASH, epoch $clawback_epoch) fall in different hours; this script posts one signal_set for both and cannot correctly represent both in a single epoch. Stopping without posting anything further."
+  fi
+  TRIGGER_EPOCH="$revoke_epoch"
+  log "[4/7] Triggering epoch, from the real revoke and clawback transactions: $TRIGGER_EPOCH"
+
+  NOW="$(date +%s)"
+  CURRENT_EPOCH=$(( NOW / EPOCH_SECS ))
+  if (( TRIGGER_EPOCH >= CURRENT_EPOCH )); then
+    close_time=$(( (TRIGGER_EPOCH + 1) * EPOCH_SECS ))
+    close_date="$(date -u -r "$close_time" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$close_time" +%Y-%m-%dT%H:%M:%SZ)"
+    die "epoch $TRIGGER_EPOCH (the real action hour) has not closed yet; it closes at $close_date UTC. post_signals rejects an epoch that is not yet < the current epoch (check_epoch_window, contracts/risk-oracle/src/lib.rs). Wait until then and re-run; nothing further was submitted."
+  fi
+  epoch_close=$(( (TRIGGER_EPOCH + 1) * EPOCH_SECS ))
+  window_remaining=$(( WINDOW_SECS - (NOW - epoch_close) ))
+  if (( window_remaining < 0 )); then
+    die "epoch $TRIGGER_EPOCH (the real action hour) is outside the 72-hour posting window (check_epoch_window); it closed too long ago to post now. Nothing further was submitted."
+  fi
+  window_close_date="$(date -u -r "$(( epoch_close + WINDOW_SECS ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( epoch_close + WINDOW_SECS ))" +%Y-%m-%dT%H:%M:%SZ)"
+  log "epoch $TRIGGER_EPOCH's 72-hour posting window closes at $window_close_date UTC ($window_remaining seconds remaining)"
+fi
+
+# -- [5/7] Backfill plain DEMOUSD history, then fill the gap hour ----
+#
+# No real issuer action in the backfill hours: just the REAL current
+# supply (read fresh per post, since mint/clawback can change it
+# between posts) and a SAMPLE liquidity figure, so check_issuer_
+# freeze's own latest_supply has something real to read even on the
+# triggering epoch itself (clawback_sum / latest_supply).
+#
+# Backfill now stops at TRIGGER_EPOCH - 2, not TRIGGER_EPOCH - 1: the
+# hour immediately before the trigger (TRIGGER_EPOCH - 1) is filled
+# explicitly below with a PLAIN post (no issuer actions, supply equal
+# to the last backfilled hour's own stored supply, supply_change_bps
+# 0) so check_supply_change_consistency has a real, contiguous
+# previous slot to compare the triggering post against. Without this
+# explicit fill, there would be a real gap between the backfill's last
+# post and TRIGGER_EPOCH - 1 that this script's own actions never
+# touch, and read_previous_supply for the trigger would read empty
+# (treated as "no check", not wrong, but less evidence than filling
+# the gap deliberately provides).
+
+if [[ -n "$TRIGGER_EPOCH" ]]; then
+  log "[5/7] Backfilling $BACKFILL_HOURS hour(s) of plain DEMOUSD history, then filling the gap hour before epoch $TRIGGER_EPOCH"
+  GAP_EPOCH=$(( TRIGGER_EPOCH - 1 ))
+  FIRST_EPOCH=$(( GAP_EPOCH - BACKFILL_HOURS ))
+
+  for (( epoch = FIRST_EPOCH; epoch < GAP_EPOCH; epoch++ )); do
+    existing_signal="$(invoke_read "signals(DEMOUSD, $epoch)" --id "$RO_ID" --source-account "$DEMO_ISSUER" \
+      --network testnet --send=no -- signals --asset "$DEMO_ID" --epoch "$epoch")"
+    if [[ "$existing_signal" != "null" ]]; then
+      plan "backfill epoch $epoch" "already done"
+      continue
+    fi
+    plan "backfill epoch $epoch" "will submit"
+    (( DRY_RUN )) && continue
+
+    supply_now="$(read_real_supply)"
+    previous_supply="$(read_previous_supply "$epoch")"
+    supply_change_bps="$(compute_supply_change_bps "$supply_now" "$previous_supply")"
+    inputs_hash="$(printf 'demo-asset-backfill:%s:%s' "$epoch" "$supply_now" | shasum -a 256 | cut -d' ' -f1)"
+    signal_set="{\"epoch\":$epoch,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"9998000\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$supply_now\",\"supply_change_bps\":$supply_change_bps,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
+    if ! post_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
+      post_signals --keeper "$KEEPER_ADDR" --asset "$DEMO_ID" --s "$signal_set" 2>&1)"; then
+      if [[ "$post_out" == *"Error(Contract, #103)"* ]]; then
+        log "epoch $epoch already posted; skipping"
+        continue
+      fi
+      die "post_signals(DEMOUSD, $epoch) failed:
+$post_out"
+    fi
+    log "epoch $epoch posted (plain history, real supply=$supply_now, supply_change_bps=$supply_change_bps)"
+  done
+
+  # The explicit gap fill: supply equal to the LAST BACKFILLED hour's
+  # own stored supply (not today's real Horizon supply, which has
+  # already moved from the clawback by the time this runs) -
+  # supply_change_bps 0 is then correct by construction, not a
+  # placeholder, since this post deliberately carries the same supply
+  # forward unchanged.
+  gap_existing_signal="$(invoke_read "signals(DEMOUSD, $GAP_EPOCH)" --id "$RO_ID" --source-account "$DEMO_ISSUER" \
+    --network testnet --send=no -- signals --asset "$DEMO_ID" --epoch "$GAP_EPOCH")"
+  if [[ "$gap_existing_signal" != "null" ]]; then
+    gap_supply="$(echo "$gap_existing_signal" | jq -r '.supply')"
+    plan "gap-fill epoch $GAP_EPOCH" "already done" "supply=$gap_supply"
+  else
+    gap_supply="$(read_previous_supply "$GAP_EPOCH")"
+    [[ -n "$gap_supply" ]] || die "epoch $GAP_EPOCH (the gap hour before the trigger) has no previous stored supply to carry forward; run with a larger backfill_hours so at least one real backfill post exists before it"
+    plan "gap-fill epoch $GAP_EPOCH" "will submit" "supply=$gap_supply, supply_change_bps=0"
+    if (( ! DRY_RUN )); then
+      gap_inputs_hash="$(printf 'demo-asset-gap-fill:%s:%s' "$GAP_EPOCH" "$gap_supply" | shasum -a 256 | cut -d' ' -f1)"
+      gap_signal_set="{\"epoch\":$GAP_EPOCH,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"9998000\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$gap_supply\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$gap_inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
+      if ! gap_post_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
+        post_signals --keeper "$KEEPER_ADDR" --asset "$DEMO_ID" --s "$gap_signal_set" 2>&1)"; then
+        if [[ "$gap_post_out" != *"Error(Contract, #103)"* ]]; then
+          die "post_signals(DEMOUSD, $GAP_EPOCH, gap fill) failed:
+$gap_post_out"
+        fi
+        log "epoch $GAP_EPOCH already posted; skipping"
+      else
+        log "epoch $GAP_EPOCH posted (gap fill, supply carried forward=$gap_supply, supply_change_bps=0)"
+      fi
+    fi
+  fi
+else
+  plan "backfill" "cannot plan yet" "triggering epoch not yet known"
+fi
+
+if [[ -z "$TRIGGER_EPOCH" ]]; then
+  plan "triggering post" "cannot plan yet" "triggering epoch not yet known"
+  if (( DRY_RUN )); then
+    log "dry run complete; nothing was submitted. Re-run without --dry-run to execute the plan above."
+    exit 0
+  fi
+  die "cannot reach the triggering post: the revoke/clawback transactions do not exist yet (this should not happen outside a fresh-holder dry run)"
+fi
+
+# -- [6/7] Refuse to post if the real numbers would not actually trigger --
 #
 # Review finding (this session): this is the check that makes the
 # earlier SUPPLY bug impossible to repeat silently. Mirrors
 # check_issuer_freeze's own clawback_amount * 10000 / supply >=
 # freeze_pct_bps check (contracts/event-registry/src/lib.rs) exactly,
 # including its integer division, against the CURRENT canonical
-# IssuerFreeze definition and the REAL supply at posting time.
+# IssuerFreeze definition and the REAL supply at posting time. Runs in
+# dry-run too: every call here is read-only (--send=no / Horizon
+# reads), so the dry-run plan below can show the real numbers the
+# triggering post would actually carry.
 
 CANONICAL_VERSION="$(invoke_read "current_version(DEMOUSD, IssuerFreeze)" --id "$ER_ID" --source-account sylox-testnet-admin --network testnet --send=no -- current_version --asset "$DEMO_ID" --kind '"IssuerFreeze"')"
 [[ "$CANONICAL_VERSION" =~ ^[1-9][0-9]*$ ]] || die "current_version(DEMOUSD, IssuerFreeze) is not registered ($CANONICAL_VERSION); run deploy/demo-asset.sh testnet first"
@@ -416,39 +801,86 @@ FREEZE_PCT_BPS="$(echo "$def_json" | jq -r '.freeze_pct_bps')"
 supply_at_trigger="$(read_real_supply)"
 (( supply_at_trigger > 0 )) || die "DEMOUSD's real supply read as 0; cannot check the freeze threshold against it"
 bps_reached=$(( CLAWBACK_AMOUNT * 10000 / supply_at_trigger ))
-log "[5/6] Check: clawback_amount * 10000 / supply = $CLAWBACK_AMOUNT * 10000 / $supply_at_trigger = $bps_reached bps (threshold: freeze_pct_bps=$FREEZE_PCT_BPS)"
+log "[6/7] Check: clawback_amount * 10000 / supply = $CLAWBACK_AMOUNT * 10000 / $supply_at_trigger = $bps_reached bps (threshold: freeze_pct_bps=$FREEZE_PCT_BPS)"
 if (( bps_reached < FREEZE_PCT_BPS )); then
   die "the real clawback ($CLAWBACK_AMOUNT stroops) against the real supply ($supply_at_trigger stroops) is only $bps_reached bps, below freeze_pct_bps=$FREEZE_PCT_BPS. Refusing to post a signal that would not actually pass check_issuer_freeze. The revocation and clawback above already happened on-chain and cannot be undone by this script; adjust the holder's balance or claw back a larger share before posting, or accept that this asset's real numbers do not clear the registered threshold."
 fi
 log "Real numbers clear the threshold ($bps_reached >= $FREEZE_PCT_BPS bps); posting the triggering signal."
 
-# -- [6/6] Post the triggering signal, with the real tx hashes --------
+# -- [7/7] Post the triggering signal, with the real tx hashes --------
 #
-# The keeper posts THIS hour's signal set with issuer_actions showing
-# exactly the revocation and the REAL clawback amount (read in step 4,
-# not requested), the REAL supply at this moment (step 5), and the
-# real transaction hashes folded into the inputs the keeper hashes
-# (inputs_hash), so anyone can check the posted numbers against the
-# chain.
+# The keeper posts the REAL action hour's signal set (TRIGGER_EPOCH,
+# step 4) with issuer_actions showing exactly the revocation and the
+# REAL clawback amount (read in step 3, not requested), the REAL
+# supply at this moment (step 6), and the real transaction hashes
+# folded into the inputs the keeper hashes (inputs_hash), so anyone
+# can check the posted numbers against the chain.
 
-log "[6/6] Posting the triggering signal for hour $NEWEST_CLOSED"
+log "[7/7] Posting the triggering signal for hour $TRIGGER_EPOCH"
+
+# The bug this PR exists to fix: hardcoding 0 here is only correct
+# when the real supply didn't move since the previous epoch's own
+# posted supply. It genuinely moves on the triggering post itself
+# (the clawback above just dropped it), so this has to be the real
+# figure - see compute_supply_change_bps's own comment for exactly
+# which contract check this satisfies and how. Uses gap_supply (step
+# 5) directly, NOT a fresh read_previous_supply call: in a real run
+# the gap fill has just posted, so the two agree, but in --dry-run the
+# gap fill was only PLANNED, never actually submitted, so re-reading
+# from chain here would find nothing yet and silently fall back to 0 -
+# exactly the bug this PR fixes, reintroduced through the dry-run path
+# specifically. gap_supply already holds the right figure either way
+# (the real stored value if already posted, the real planned
+# carry-forward value if not).
+previous_supply_at_trigger="$gap_supply"
+trigger_supply_change_bps="$(compute_supply_change_bps "$supply_at_trigger" "$previous_supply_at_trigger")"
+log "supply_change_bps for epoch $TRIGGER_EPOCH: ($supply_at_trigger - $previous_supply_at_trigger) * 10000 / $previous_supply_at_trigger = $trigger_supply_change_bps"
+
 inputs_json=$(jq -nc \
-  --arg epoch "$NEWEST_CLOSED" \
+  --arg epoch "$TRIGGER_EPOCH" \
   --arg clawback_amount "$CLAWBACK_AMOUNT" \
   --arg supply "$supply_at_trigger" \
   --arg revoke_tx "$REVOKE_TX_HASH" \
   --arg clawback_tx "$CLAWBACK_TX_HASH" \
   '{epoch: ($epoch|tonumber), clawback_amount: ($clawback_amount|tonumber), supply: ($supply|tonumber), auth_revocations: 1, revoke_tx_hash: $revoke_tx, clawback_tx_hash: $clawback_tx}')
 inputs_hash="$(printf '%s' "$inputs_json" | shasum -a 256 | cut -d' ' -f1)"
-signal_set="{\"epoch\":$NEWEST_CLOSED,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"9998000\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$supply_at_trigger\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":1,\"clawback_amount\":\"$CLAWBACK_AMOUNT\",\"auth_revocations\":1,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
-if ! trigger_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
-  post_signals --keeper "$KEEPER_ADDR" --asset "$DEMO_ID" --s "$signal_set" 2>&1)"; then
-  die "post_signals(DEMOUSD, $NEWEST_CLOSED, the triggering signal) failed:
+signal_set="{\"epoch\":$TRIGGER_EPOCH,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"9998000\",\"liquidity_2pct\":\"$LIQUIDITY\",\"redemption_net\":\"0\",\"supply\":\"$supply_at_trigger\",\"supply_change_bps\":$trigger_supply_change_bps,\"issuer_actions\":{\"clawbacks\":1,\"clawback_amount\":\"$CLAWBACK_AMOUNT\",\"auth_revocations\":1,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$KEEPER_ADDR\"}"
+
+existing_trigger_signal="$(invoke_read "signals(DEMOUSD, $TRIGGER_EPOCH)" --id "$RO_ID" --source-account "$DEMO_ISSUER" \
+  --network testnet --send=no -- signals --asset "$DEMO_ID" --epoch "$TRIGGER_EPOCH")"
+if [[ "$existing_trigger_signal" != "null" ]]; then
+  plan "triggering post" "already done" "epoch=$TRIGGER_EPOCH"
+  log "epoch $TRIGGER_EPOCH already posted (a prior run got this far); not posting again"
+else
+  plan "triggering post" "will submit" "epoch=$TRIGGER_EPOCH, previous_supply=$previous_supply_at_trigger, supply=$supply_at_trigger, supply_change_bps=$trigger_supply_change_bps, clawback_amount=$CLAWBACK_AMOUNT, inputs_hash=$inputs_hash"
+
+  if (( ! DRY_RUN )); then
+    # RESUME NOTE: if a prior run already posted this exact epoch
+    # between the read above and this call (e.g. a second instance of
+    # this script running concurrently), post_signals itself rejects
+    # the repeat with #103 EpochAlreadyPosted - the same signal the
+    # backfill loop (step 5) already treats as "already done", not a
+    # failure, here too.
+    if ! trigger_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper --network testnet -- \
+      post_signals --keeper "$KEEPER_ADDR" --asset "$DEMO_ID" --s "$signal_set" 2>&1)"; then
+      if [[ "$trigger_out" == *"Error(Contract, #103)"* ]]; then
+        log "epoch $TRIGGER_EPOCH already posted; not posting again"
+      else
+        die "post_signals(DEMOUSD, $TRIGGER_EPOCH, the triggering signal) failed:
 $trigger_out"
+      fi
+    else
+      echo "$trigger_out"
+      log "triggering signal posted for epoch $TRIGGER_EPOCH: clawback_amount=$CLAWBACK_AMOUNT (real), supply=$supply_at_trigger (real), supply_change_bps=$trigger_supply_change_bps (real), auth_revocations=1"
+      log "inputs (with real tx hashes): $inputs_json"
+    fi
+  fi
 fi
-echo "$trigger_out"
-log "triggering signal posted for epoch $NEWEST_CLOSED: clawback_amount=$CLAWBACK_AMOUNT (real), supply=$supply_at_trigger (real), auth_revocations=1"
-log "inputs (with real tx hashes): $inputs_json"
+
+if (( DRY_RUN )); then
+  log "dry run complete; nothing was submitted. Re-run without --dry-run to execute the plan above."
+  exit 0
+fi
 
 PENDING_UNTIL=$(( $(date +%s) + 7200 ))
 log "This signal is Pending until $(date -u -r "$PENDING_UNTIL" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$PENDING_UNTIL" +%Y-%m-%dT%H:%M:%SZ) UTC (signal_dispute_secs, 2h), then effectively Final."

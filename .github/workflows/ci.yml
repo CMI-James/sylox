@@ -74,6 +74,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash deploy/test-demo-asset-trigger-find-revoke.sh
 
+  demo-asset-trigger-find-clawback-test:
+    name: deploy/demo-asset-trigger.sh find_clawback_tx_hash regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-demo-asset-trigger-find-clawback.sh
+
+  demo-asset-trigger-supply-change-bps-test:
+    name: deploy/demo-asset-trigger.sh compute_supply_change_bps regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-demo-asset-trigger-supply-change-bps.sh
+
+  demo-asset-trigger-read-tx-epoch-test:
+    name: deploy/demo-asset-trigger.sh created_at_to_epoch regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-demo-asset-trigger-read-tx-epoch.sh
+
   test:
     name: cargo test --workspace
     runs-on: ubuntu-latest
