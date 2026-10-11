@@ -98,13 +98,17 @@ export function getKit() {
  *   this app's own modules): resolves `null`, nothing to restore.
  * - Freighter: the one wallet this kit version exposes a real
  *   permission check for. `isAllowed()` (no prompt) confirms the site
- *   still has access; only then does `kit.getAddress()` - reading the
- *   kit's own already-restored memory, not a fresh wallet round-trip -
- *   return the address. Not allowed (or no longer installed/unlocked,
+ *   still has access. Not allowed (or no longer installed/unlocked,
  *   which `isAllowed` surfaces as `error` the same way): the kit's own
  *   saved state is cleared via `disconnect()` so a stale selection
  *   doesn't keep resurfacing on every future load, and this resolves
- *   `null`.
+ *   `null`. Allowed: compares the kit's own cached address
+ *   (`kit.getAddress()`) against Freighter's real current one
+ *   (`getAddress()` from `@stellar/freighter-api`, also no prompt) -
+ *   the visitor may have switched accounts in Freighter itself since
+ *   the kit last cached it (issue #59). The live address wins on a
+ *   mismatch; see `ensureFreighterAccess` for the equivalent check
+ *   mid-visit, right before signing.
  * - xBull/Albedo: this kit version exposes no silent "is this still
  *   allowed" check for either (unlike Freighter's `isAllowed`), so the
  *   kit's own already-restored `activeAddress` is trusted as-is - the
@@ -132,7 +136,7 @@ export async function restoreWalletSilently(): Promise<string | null> {
     }
   }
 
-  const { isAllowed } = await import("@stellar/freighter-api");
+  const { isAllowed, getAddress } = await import("@stellar/freighter-api");
   const allowed = await isAllowed();
   if (allowed.error || !allowed.isAllowed) {
     await kit.disconnect(); // Clears the kit's own saved selection/address so this stale state doesn't keep resurfacing.
@@ -140,10 +144,44 @@ export async function restoreWalletSilently(): Promise<string | null> {
   }
 
   try {
-    const { address } = await kit.getAddress();
-    return address;
+    const { address: cached } = await kit.getAddress();
+    // The kit's own cached address can be stale (issue #59: the
+    // visitor switched accounts in Freighter itself, outside this
+    // app, since the kit last wrote it to localStorage). Freighter's
+    // own getAddress() (no prompt, same as isAllowed() above) is the
+    // live, current account - trusted over the cache on every
+    // restore, deliberately not written back into the kit's own
+    // state (no safe public setter for it, and nothing else in this
+    // app ever reads the kit's cached address directly - see
+    // WalletContext.tsx, which always keeps its own `address` React
+    // state as the single source of truth and passes it explicitly
+    // into every sign call). One extra no-prompt call per load.
+    const live = await getAddress();
+    if (!live.error && live.address && live.address !== cached) {
+      return live.address;
+    }
+    return cached;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Thrown by `ensureFreighterAccess` when Freighter's currently
+ * selected account no longer matches the address the app is about to
+ * sign with (issue #59: the visitor switched accounts in Freighter
+ * mid-visit, after this app already had one connected). Carries the
+ * new address so the caller can update what it shows - never sign
+ * silently as a different account than the one on screen.
+ */
+export class FreighterAccountSwitchedError extends Error {
+  readonly newAddress: string;
+  constructor(newAddress: string) {
+    super(
+      `Your Freighter account changed to ${newAddress.slice(0, 4)}…${newAddress.slice(-4)}. Check it's the one you want, then try again.`,
+    );
+    this.name = "FreighterAccountSwitchedError";
+    this.newAddress = newAddress;
   }
 }
 
@@ -160,8 +198,18 @@ export async function restoreWalletSilently(): Promise<string | null> {
  * `isAllowed()` checks the real current permission with no prompt;
  * `requestAccess()` prompts only if actually needed. Call this right
  * before signing, not just once at connect time.
+ *
+ * Also catches a switch in the middle of a visit (issue #59): once
+ * access is confirmed, Freighter's own `getAddress()` (no prompt) is
+ * compared against `currentAddress` - the address the app is ABOUT TO
+ * sign with. A mismatch throws `FreighterAccountSwitchedError` instead
+ * of proceeding, so a transaction never gets signed as an account
+ * other than the one the visitor sees connected on screen; the caller
+ * (`WalletContext.signTransaction`) catches this specifically to
+ * update its own displayed address and stop before ever calling
+ * `kit.signTransaction`.
  */
-export async function ensureFreighterAccess(): Promise<void> {
+export async function ensureFreighterAccess(currentAddress: string): Promise<void> {
   const kit = await getKit();
 
   let selectedProductId: string;
@@ -178,12 +226,17 @@ export async function ensureFreighterAccess(): Promise<void> {
   }
   if (selectedProductId !== FREIGHTER_ID) return; // Only Freighter's permission model works this way.
 
-  const { isAllowed, requestAccess } = await import("@stellar/freighter-api");
+  const { isAllowed, requestAccess, getAddress } = await import("@stellar/freighter-api");
   const allowed = await isAllowed();
   if (allowed.error || !allowed.isAllowed) {
     const access = await requestAccess();
     if (access.error) {
       throw new Error("Freighter needs permission for this site. Connect Freighter, then try again.");
     }
+  }
+
+  const live = await getAddress();
+  if (!live.error && live.address && live.address !== currentAddress) {
+    throw new FreighterAccountSwitchedError(live.address);
   }
 }

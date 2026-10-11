@@ -62,7 +62,10 @@ async function connectWallet(user: ReturnType<typeof userEvent.setup>, connectBu
 
 describe("WriteActionButton", () => {
   it("shows 'Connect wallet to <label>' when no wallet is connected, and never calls prepare", async () => {
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() };
+    });
     const prepare = vi.fn();
 
     render(
@@ -99,7 +102,10 @@ describe("WriteActionButton", () => {
 describe("WriteActionButton - connected flow", () => {
   it("calls prepare with the connected address once a wallet connects, then confirm with a matching signer", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -135,7 +141,10 @@ describe("WriteActionButton - connected flow", () => {
 
   it("shows the simulated error in plain words and never calls confirm when prepare rejects", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(() => ADDRESS_A), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -164,7 +173,10 @@ describe("WriteActionButton - connected flow", () => {
   it("re-prepares against the new address if the connected wallet changes before confirm", async () => {
     vi.resetModules();
     let currentAddress = ADDRESS_A;
-    vi.doMock("@/lib/wallet/kit", () => ({ getKit: async () => makeFakeKit(() => currentAddress), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return { ...actual, getKit: async () => makeFakeKit(() => currentAddress), ensureFreighterAccess: fakeEnsureFreighterAccess(), restoreWalletSilently: fakeRestoreWalletSilently() };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
@@ -222,11 +234,15 @@ describe("WriteActionButton - connected flow", () => {
   it("checks Freighter access before signing, and calls onSuccess once confirm resolves", async () => {
     vi.resetModules();
     const checkAccess = vi.fn(async () => {});
-    vi.doMock("@/lib/wallet/kit", () => ({
-      getKit: async () => makeFakeKit(() => ADDRESS_A),
-      ensureFreighterAccess: checkAccess,
-      restoreWalletSilently: fakeRestoreWalletSilently(),
-    }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return {
+        ...actual,
+        getKit: async () => makeFakeKit(() => ADDRESS_A),
+        ensureFreighterAccess: checkAccess,
+        restoreWalletSilently: fakeRestoreWalletSilently(),
+      };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -272,11 +288,15 @@ describe("WriteActionButton - connected flow", () => {
 
   it("never calls onSuccess when confirm itself fails", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({
-      getKit: async () => makeFakeKit(() => ADDRESS_A),
-      ensureFreighterAccess: fakeEnsureFreighterAccess(),
-      restoreWalletSilently: fakeRestoreWalletSilently(),
-    }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return {
+        ...actual,
+        getKit: async () => makeFakeKit(() => ADDRESS_A),
+        ensureFreighterAccess: fakeEnsureFreighterAccess(),
+        restoreWalletSilently: fakeRestoreWalletSilently(),
+      };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
@@ -308,18 +328,22 @@ describe("WriteActionButton - connected flow", () => {
 
   it("shows a plain message, not a raw error, when Freighter access is denied before signing", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/wallet/kit", () => ({
-      getKit: async () => makeFakeKit(() => ADDRESS_A),
-      // The real ensureFreighterAccess throws this exact plain message
-      // (see lib/wallet/kit.test.ts) when requestAccess comes back
-      // denied - stubbed here with the same message so this test
-      // asserts the full stack surfaces it unchanged, not a raw
-      // Freighter error object.
-      ensureFreighterAccess: vi.fn(async () => {
-        throw new Error("Freighter needs permission for this site. Connect Freighter, then try again.");
-      }),
-      restoreWalletSilently: fakeRestoreWalletSilently(),
-    }));
+    vi.doMock("@/lib/wallet/kit", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/wallet/kit")>("@/lib/wallet/kit");
+      return {
+        ...actual,
+        getKit: async () => makeFakeKit(() => ADDRESS_A),
+        // The real ensureFreighterAccess throws this exact plain message
+        // (see lib/wallet/kit.test.ts) when requestAccess comes back
+        // denied - stubbed here with the same message so this test
+        // asserts the full stack surfaces it unchanged, not a raw
+        // Freighter error object.
+        ensureFreighterAccess: vi.fn(async () => {
+          throw new Error("Freighter needs permission for this site. Connect Freighter, then try again.");
+        }),
+        restoreWalletSilently: fakeRestoreWalletSilently(),
+      };
+    });
     const { WalletProvider: FreshProvider } = await import("@/lib/wallet/WalletContext");
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { WalletProvider, useWallet } from "./WalletContext";
@@ -19,8 +20,30 @@ function DisconnectProbe() {
   );
 }
 
-const { restoreWalletSilently } = vi.hoisted(() => ({
+function SignProbe() {
+  const { address, signTransaction } = useWallet();
+  const [signError, setSignError] = useState<string | null>(null);
+  return (
+    <div>
+      <p data-testid="address">{address ?? "none"}</p>
+      <p data-testid="sign-error">{signError ?? "none"}</p>
+      <button
+        type="button"
+        onClick={() => {
+          signTransaction("fake-xdr").catch((e: unknown) => {
+            setSignError(e instanceof Error ? e.message : String(e));
+          });
+        }}
+      >
+        Sign
+      </button>
+    </div>
+  );
+}
+
+const { restoreWalletSilently, ensureFreighterAccess } = vi.hoisted(() => ({
   restoreWalletSilently: vi.fn(),
+  ensureFreighterAccess: vi.fn(async () => {}),
 }));
 
 vi.mock("./kit", async () => {
@@ -28,8 +51,10 @@ vi.mock("./kit", async () => {
   return {
     ...actual,
     restoreWalletSilently,
+    ensureFreighterAccess,
     getKit: async () => ({
       disconnect: vi.fn(async () => {}),
+      signTransaction: vi.fn(async () => ({ signedTxXdr: "fake-signed-xdr" })),
     }),
   };
 });
@@ -128,5 +153,60 @@ describe("WalletProvider - disconnect", () => {
 
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     expect(screen.getByTestId("address")).toHaveTextContent("none");
+  });
+});
+
+/**
+ * issue #59: a Freighter account switch mid-visit (not at restore
+ * time - WalletContext already has a connected `address`, and the
+ * visitor switches accounts in the Freighter extension before
+ * clicking a write action). ensureFreighterAccess itself is mocked
+ * directly here (its own real logic, including the live-vs-current
+ * comparison, is covered by kit.test.ts) - this exercises
+ * WalletContext.signTransaction's own handling of what it throws:
+ * updating the displayed address and stopping before ever calling
+ * kit.signTransaction.
+ */
+describe("WalletProvider - signTransaction on a mid-visit Freighter account switch", () => {
+  beforeEach(() => {
+    restoreWalletSilently.mockReset().mockResolvedValue("GORIGINAL");
+    ensureFreighterAccess.mockReset();
+  });
+
+  it("updates the displayed address and stops the sign, without ever calling kit.signTransaction", async () => {
+    const { FreighterAccountSwitchedError } = await import("./kit");
+    ensureFreighterAccess.mockRejectedValue(new FreighterAccountSwitchedError("GSWITCHEDTO"));
+    const user = (await import("@testing-library/user-event")).default.setup();
+
+    render(
+      <WalletProvider>
+        <SignProbe />
+      </WalletProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent("GORIGINAL"));
+
+    await user.click(screen.getByRole("button", { name: "Sign" }));
+
+    await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent("GSWITCHEDTO"));
+    expect(screen.getByTestId("sign-error")).toHaveTextContent(
+      /your freighter account changed to.*check it's the one you want, then try again\./i,
+    );
+  });
+
+  it("signs normally, with no address change, when the account hasn't switched", async () => {
+    ensureFreighterAccess.mockResolvedValue(undefined);
+    const user = (await import("@testing-library/user-event")).default.setup();
+
+    render(
+      <WalletProvider>
+        <SignProbe />
+      </WalletProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent("GORIGINAL"));
+
+    await user.click(screen.getByRole("button", { name: "Sign" }));
+
+    await waitFor(() => expect(screen.getByTestId("sign-error")).toHaveTextContent("none"));
+    expect(screen.getByTestId("address")).toHaveTextContent("GORIGINAL"); // Unchanged.
   });
 });

@@ -29,6 +29,9 @@ describe("resolveKitNetwork", () => {
   });
 });
 
+const ADDRESS_A = "GCWWB2WYVRE4SSMASR6EMFQ7D3K6BEOLN5UQAXGS5YWPX2ZJ44JYKER5";
+const ADDRESS_B = "GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP";
+
 /**
  * ensureFreighterAccess: Freighter's own site permission is separate
  * from this app's in-memory wallet state (see kit.ts's own doc
@@ -43,11 +46,17 @@ describe("resolveKitNetwork", () => {
 describe("ensureFreighterAccess", () => {
   const isAllowed = vi.fn();
   const requestAccess = vi.fn();
+  const getAddress = vi.fn();
 
   beforeEach(() => {
     vi.resetModules();
     isAllowed.mockReset();
     requestAccess.mockReset();
+    // Freighter's own current account defaults to matching
+    // ADDRESS_A - most tests below pass ADDRESS_A as the app's
+    // current address and aren't about the account-switch case at
+    // all, so this keeps them from tripping over it by accident.
+    getAddress.mockReset().mockResolvedValue({ address: ADDRESS_A });
   });
 
   function mockKitModules(selectedProductId: string) {
@@ -65,7 +74,7 @@ describe("ensureFreighterAccess", () => {
     }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/xbull", () => ({ xBullModule: class {} }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/albedo", () => ({ AlbedoModule: class {} }));
-    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess }));
+    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess, getAddress }));
   }
 
   /** The real kit's own `selectedModule` getter when no wallet has ever been set (see kit.js: `throw { code: -3, message: "Please set the wallet first" }`) - a plain object, never an Error. */
@@ -84,25 +93,25 @@ describe("ensureFreighterAccess", () => {
     }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/xbull", () => ({ xBullModule: class {} }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/albedo", () => ({ AlbedoModule: class {} }));
-    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess }));
+    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, requestAccess, getAddress }));
   }
 
   it("does nothing for a non-Freighter wallet - isAllowed/requestAccess are never called", async () => {
     mockKitModules("xbull");
     const { ensureFreighterAccess } = await import("./kit");
 
-    await ensureFreighterAccess();
+    await ensureFreighterAccess(ADDRESS_A);
 
     expect(isAllowed).not.toHaveBeenCalled();
     expect(requestAccess).not.toHaveBeenCalled();
   });
 
-  it("does nothing further when Freighter already allows the site", async () => {
+  it("does nothing further when Freighter already allows the site and the account hasn't changed", async () => {
     mockKitModules("freighter");
     isAllowed.mockResolvedValue({ isAllowed: true });
     const { ensureFreighterAccess } = await import("./kit");
 
-    await expect(ensureFreighterAccess()).resolves.toBeUndefined();
+    await expect(ensureFreighterAccess(ADDRESS_A)).resolves.toBeUndefined();
 
     expect(isAllowed).toHaveBeenCalled();
     expect(requestAccess).not.toHaveBeenCalled();
@@ -111,10 +120,10 @@ describe("ensureFreighterAccess", () => {
   it("requests access when Freighter no longer allows the site, and succeeds once access is granted", async () => {
     mockKitModules("freighter");
     isAllowed.mockResolvedValue({ isAllowed: false });
-    requestAccess.mockResolvedValue({ address: "GFAKE" });
+    requestAccess.mockResolvedValue({ address: ADDRESS_A });
     const { ensureFreighterAccess } = await import("./kit");
 
-    await expect(ensureFreighterAccess()).resolves.toBeUndefined();
+    await expect(ensureFreighterAccess(ADDRESS_A)).resolves.toBeUndefined();
 
     expect(requestAccess).toHaveBeenCalled();
   });
@@ -125,7 +134,7 @@ describe("ensureFreighterAccess", () => {
     requestAccess.mockResolvedValue({ error: { message: "User declined access" } });
     const { ensureFreighterAccess } = await import("./kit");
 
-    await expect(ensureFreighterAccess()).rejects.toThrow(
+    await expect(ensureFreighterAccess(ADDRESS_A)).rejects.toThrow(
       /freighter needs permission for this site\. connect freighter, then try again\./i,
     );
   });
@@ -133,10 +142,10 @@ describe("ensureFreighterAccess", () => {
   it("also requests access when isAllowed itself errors, treating that the same as not allowed", async () => {
     mockKitModules("freighter");
     isAllowed.mockResolvedValue({ isAllowed: false, error: { message: "internal error" } });
-    requestAccess.mockResolvedValue({ address: "GFAKE" });
+    requestAccess.mockResolvedValue({ address: ADDRESS_A });
     const { ensureFreighterAccess } = await import("./kit");
 
-    await expect(ensureFreighterAccess()).resolves.toBeUndefined();
+    await expect(ensureFreighterAccess(ADDRESS_A)).resolves.toBeUndefined();
     expect(requestAccess).toHaveBeenCalled();
   });
 
@@ -144,12 +153,57 @@ describe("ensureFreighterAccess", () => {
     mockKitModulesNoWalletSelected();
     const { ensureFreighterAccess } = await import("./kit");
 
-    await expect(ensureFreighterAccess()).rejects.toThrow(
-      /connect a wallet, then try again\./i,
-    );
+    await expect(ensureFreighterAccess(ADDRESS_A)).rejects.toThrow(/connect a wallet, then try again\./i);
     // Never calls into Freighter at all - there's no wallet to check permission for yet.
     expect(isAllowed).not.toHaveBeenCalled();
     expect(requestAccess).not.toHaveBeenCalled();
+  });
+
+  /**
+   * issue #59: a switch mid-visit. Access is fine (isAllowed: true),
+   * but Freighter's own CURRENT account (getAddress) no longer
+   * matches the address the app is about to sign with.
+   */
+  it("throws FreighterAccountSwitchedError with the new address when Freighter's current account differs from the app's", async () => {
+    mockKitModules("freighter");
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    getAddress.mockResolvedValue({ address: ADDRESS_B });
+    const { ensureFreighterAccess, FreighterAccountSwitchedError } = await import("./kit");
+
+    await expect(ensureFreighterAccess(ADDRESS_A)).rejects.toSatisfy((e: unknown) => {
+      expect(e).toBeInstanceOf(FreighterAccountSwitchedError);
+      expect((e as InstanceType<typeof FreighterAccountSwitchedError>).newAddress).toBe(ADDRESS_B);
+      return true;
+    });
+  });
+
+  it("FreighterAccountSwitchedError's own message names the new address in plain words", async () => {
+    mockKitModules("freighter");
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    getAddress.mockResolvedValue({ address: ADDRESS_B });
+    const { ensureFreighterAccess } = await import("./kit");
+
+    await expect(ensureFreighterAccess(ADDRESS_A)).rejects.toThrow(
+      /your freighter account changed to.*check it's the one you want, then try again\./i,
+    );
+  });
+
+  it("never throws the account-switch error when the addresses genuinely match", async () => {
+    mockKitModules("freighter");
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    getAddress.mockResolvedValue({ address: ADDRESS_A });
+    const { ensureFreighterAccess } = await import("./kit");
+
+    await expect(ensureFreighterAccess(ADDRESS_A)).resolves.toBeUndefined();
+  });
+
+  it("never throws the account-switch error when Freighter's own getAddress itself errors (nothing reliable to compare against)", async () => {
+    mockKitModules("freighter");
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    getAddress.mockResolvedValue({ address: "", error: { message: "could not read address" } });
+    const { ensureFreighterAccess } = await import("./kit");
+
+    await expect(ensureFreighterAccess(ADDRESS_A)).resolves.toBeUndefined();
   });
 });
 
@@ -163,11 +217,13 @@ describe("ensureFreighterAccess", () => {
 describe("restoreWalletSilently", () => {
   const isAllowed = vi.fn();
   const disconnect = vi.fn(async () => {});
+  const freighterGetAddress = vi.fn();
 
   beforeEach(() => {
     vi.resetModules();
     isAllowed.mockReset();
     disconnect.mockReset().mockResolvedValue(undefined);
+    freighterGetAddress.mockReset();
   });
 
   function mockKitModules(opts: { selectedProductId?: string; getAddressResult?: { address: string } }) {
@@ -181,7 +237,8 @@ describe("restoreWalletSilently", () => {
         // StellarWalletsKit's own static getAddress() - reads its
         // already-restored in-memory activeAddress, never a wallet
         // round-trip. Distinct from @stellar/freighter-api's own
-        // getAddress, which restoreWalletSilently never calls.
+        // getAddress (freighterGetAddress below), which is the LIVE
+        // current account.
         getAddress: vi.fn(async () => {
           if (opts.getAddressResult) return opts.getAddressResult;
           throw { code: -1, message: "No wallet has been connected." };
@@ -195,7 +252,7 @@ describe("restoreWalletSilently", () => {
     }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/xbull", () => ({ xBullModule: class {} }));
     vi.doMock("@creit.tech/stellar-wallets-kit/modules/albedo", () => ({ AlbedoModule: class {} }));
-    vi.doMock("@stellar/freighter-api", () => ({ isAllowed }));
+    vi.doMock("@stellar/freighter-api", () => ({ isAllowed, getAddress: freighterGetAddress }));
   }
 
   it("resolves null, with no wallet or network calls, when nothing was ever selected", async () => {
@@ -207,9 +264,10 @@ describe("restoreWalletSilently", () => {
     expect(disconnect).not.toHaveBeenCalled();
   });
 
-  it("restores the address for Freighter when isAllowed is true, with no requestAccess call", async () => {
+  it("restores the cached address for Freighter when isAllowed is true and it matches Freighter's live current account", async () => {
     mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: "GFREIGHTER" } });
     isAllowed.mockResolvedValue({ isAllowed: true });
+    freighterGetAddress.mockResolvedValue({ address: "GFREIGHTER" });
     const { restoreWalletSilently } = await import("./kit");
 
     await expect(restoreWalletSilently()).resolves.toBe("GFREIGHTER");
@@ -247,5 +305,38 @@ describe("restoreWalletSilently", () => {
     const { restoreWalletSilently } = await import("./kit");
 
     await expect(restoreWalletSilently()).resolves.toBeNull();
+  });
+
+  /**
+   * issue #59: a restore with a mismatch. The kit's own cache
+   * (persisted the last time the app ran) says one address; Freighter
+   * itself (the visitor switched accounts in the extension since then)
+   * says a different one. The live one wins.
+   */
+  it("returns Freighter's live current address, not the kit's stale cached one, when they differ", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: ADDRESS_A } });
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    freighterGetAddress.mockResolvedValue({ address: ADDRESS_B });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBe(ADDRESS_B);
+  });
+
+  it("returns the cached address unchanged when it matches Freighter's live current account", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: ADDRESS_A } });
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    freighterGetAddress.mockResolvedValue({ address: ADDRESS_A });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBe(ADDRESS_A);
+  });
+
+  it("falls back to the kit's cached address when Freighter's own getAddress itself errors (nothing reliable to compare against)", async () => {
+    mockKitModules({ selectedProductId: "freighter", getAddressResult: { address: ADDRESS_A } });
+    isAllowed.mockResolvedValue({ isAllowed: true });
+    freighterGetAddress.mockResolvedValue({ address: "", error: { message: "could not read address" } });
+    const { restoreWalletSilently } = await import("./kit");
+
+    await expect(restoreWalletSilently()).resolves.toBe(ADDRESS_A);
   });
 });
