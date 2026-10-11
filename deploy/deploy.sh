@@ -35,6 +35,24 @@
 #       without touching it) — confirmed by reading
 #       contracts/event-registry/src/lib.rs before writing this
 #       script. `sylox-testnet-admin` is passed as a placeholder.
+#   D5. How EventRegistry gets the REAL MarketFactory address once
+#       MarketFactory exists: through upgrade() + migrate() (#12), not
+#       a new governor-only setter added in this redeploy. No setter is
+#       added here: a set_factory(Address) function would be new,
+#       live, governor-gated surface area for a value nothing reads
+#       yet (same D4 confirmation - config.factory has zero real
+#       behavior depending on it today), untestable in any way that
+#       exercises real behavior since there is nothing for the real
+#       factory address to actually do until MarketFactory's own calls
+#       exist. Whoever ships MarketFactory already needs a new
+#       EventRegistry upgrade anyway, to wire the real cross-contract
+#       calls version_has_live_cover currently stubs out - the real
+#       factory address becomes a constant in THAT upgrade's own
+#       migrate() body (CONTRACT_VERSION bumped, migrate() writes the
+#       real address once, gated the same way every other migrate() is),
+#       not a value passed in at call time. See deploy/README.md's
+#       "Upgrading a contract" section for the general upgrade
+#       procedure this would follow.
 #
 # Identities (created only if they don't already exist, then funded
 # via Friendbot): sylox-testnet-deployer, sylox-testnet-admin,

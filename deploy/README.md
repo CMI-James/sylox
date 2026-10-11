@@ -425,6 +425,21 @@ the same client and confirm they still decode correctly). No storage
 shape changes ship with issue #12 itself; `migrate()` is wired and
 tested but its own body is empty until a future upgrade needs it.
 
+**EventRegistry's real `factory` address arrives through this same
+mechanism, later.** `config.factory` (set at construction, D4 in
+`deploy/deploy.sh`'s own header) has no reader anywhere in
+EventRegistry today - `version_has_live_cover` is stubbed to always
+return `false`, never touching it. No governor-only `set_factory`
+setter was added in the #12/#21 redeploy: that would be new, live,
+governor-gated surface area for a value nothing reads yet, untestable
+in any way that exercises real behavior. Whoever ships MarketFactory
+already needs a new EventRegistry upgrade anyway, to wire the real
+cross-contract calls `version_has_live_cover` currently stubs out -
+the real factory address becomes a constant in THAT upgrade's own
+`migrate()` body (bump `CONTRACT_VERSION`, `migrate()` writes the real
+address once, gated the same way every other `migrate()` already is),
+following the upgrade procedure above.
+
 ### The live contracts cannot be upgraded yet
 
 The contracts already deployed to testnet (`deployments/testnet.json`)
