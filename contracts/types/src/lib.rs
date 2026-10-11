@@ -12,6 +12,7 @@ pub mod series;
 pub mod staking;
 pub mod time;
 pub mod treasury;
+pub mod upgrade;
 
 pub use assets::*;
 pub use events::*;

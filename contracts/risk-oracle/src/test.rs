@@ -3285,3 +3285,126 @@ fn every_event_uses_the_sylox_event_name_asset_topic_convention() {
     client.post_signals(&keeper3, &asset3, &s3);
     assert_event_topics(&env, "asset_stale", &asset3);
 }
+
+// -- Issue #12: upgrade / migrate / version --
+
+/// `version()` reads the running code's own `CONTRACT_VERSION`
+/// constant, with no auth required (a plain read anyone can make).
+#[test]
+fn version_reads_contract_version_constant() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    assert_eq!(fixture.client.version(), crate::CONTRACT_VERSION);
+}
+
+/// Non-governor cannot upgrade: same native auth trap as every other
+/// governor-gated call (see
+/// `missing_auth_traps_natively_rather_than_returning_unauthorized`
+/// above), demonstrated directly with no `mock_all_auths()` so the
+/// governor's signature is genuinely missing.
+#[test]
+#[should_panic]
+fn upgrade_without_governor_auth_traps() {
+    let env = Env::default();
+    let staking = env.register(MockStaking, ());
+    let contract_id = env.register(RiskOracle, ());
+    let client = RiskOracleClient::new(&env, &contract_id);
+    let governor = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&governor, &registry, &staking);
+
+    let new_wasm_hash = env.upload(RiskOracle);
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.upgrade(&new_wasm_hash);
+}
+
+/// Upgrading to new code (a fresh wasm hash, uploaded via `env.upload`
+/// per soroban-sdk's own documented pattern for exercising
+/// `update_current_contract` in a unit test without a compiled .wasm
+/// fixture) keeps all existing storage: an asset added, and a real
+/// `post_signals` call's own posted data, both still read back
+/// correctly through the SAME client and address after the swap.
+/// Also confirms the `Upgraded` event carries the pre-upgrade
+/// version.
+#[test]
+fn upgrade_keeps_existing_storage() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    let staking_client = crate::mocks::MockStakingClient::new(&env, &fixture.staking);
+    let asset = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    fixture
+        .client
+        .add_asset(&asset_config(&env, &asset, &issuer));
+    let keeper = Address::generate(&env);
+    staking_client.set_aggregate(&asset, &0, &EndpointStatus::Up);
+    env.ledger().set_timestamp(3_600);
+    let signals = signal_set(&env, 0, sylox_types::SCALE);
+    fixture.client.post_signals(&keeper, &asset, &signals);
+
+    let score_before = fixture.client.score(&asset);
+    let asset_config_before = fixture.client.asset_config(&asset);
+
+    let new_wasm_hash = env.upload(RiskOracle);
+    fixture.client.upgrade(&new_wasm_hash);
+    assert_event_topics(&env, "upgraded", &fixture.client.address);
+
+    assert_eq!(
+        fixture.client.score(&asset),
+        score_before,
+        "score(asset) must read the same after an upgrade with no storage-shape change"
+    );
+    assert_eq!(
+        fixture.client.asset_config(&asset),
+        asset_config_before,
+        "asset_config(asset) must read the same after an upgrade with no storage-shape change"
+    );
+    assert_eq!(
+        fixture.client.version(),
+        crate::CONTRACT_VERSION,
+        "the re-uploaded code is the same crate, so its own version() constant is unchanged"
+    );
+}
+
+/// `migrate()` can't run twice for the same target version:
+/// `AlreadyMigrated` on the second call, confirmed via `try_migrate`
+/// since this is a real returned error, not a native auth trap.
+#[test]
+fn migrate_cannot_run_twice_for_the_same_version() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    fixture.client.migrate(&1);
+    let result = fixture.client.try_migrate(&1);
+    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
+}
+
+/// A later `migrate()` call for a HIGHER target version still
+/// succeeds after an earlier one already ran: `do_migrate` compares
+/// against the stored version, not "has migrate ever been called at
+/// all" - each version runs at most once, not migrate() overall.
+#[test]
+fn migrate_to_a_later_version_succeeds_after_an_earlier_one() {
+    let env = Env::default();
+    let fixture = setup(&env);
+    fixture.client.migrate(&1);
+    fixture.client.migrate(&2);
+    let result = fixture.client.try_migrate(&2);
+    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
+}
+
+/// Non-governor cannot migrate: same native auth trap pattern as
+/// `upgrade_without_governor_auth_traps`.
+#[test]
+#[should_panic]
+fn migrate_without_governor_auth_traps() {
+    let env = Env::default();
+    let staking = env.register(MockStaking, ());
+    let contract_id = env.register(RiskOracle, ());
+    let client = RiskOracleClient::new(&env, &contract_id);
+    let governor = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&governor, &registry, &staking);
+
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.migrate(&1);
+}

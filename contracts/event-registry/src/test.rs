@@ -2785,3 +2785,98 @@ fn cover_gate_clear_with_no_activity() {
         .add_asset(&asset_config(&env, &asset, &issuer, IssuerFlags::default()));
     assert_eq!(fx.client.cover_gate(&asset), CoverGate::Clear);
 }
+
+// -- Issue #12: upgrade / migrate / version --
+
+#[test]
+fn version_reads_contract_version_constant() {
+    let env = Env::default();
+    let fx = setup(&env);
+    assert_eq!(fx.client.version(), crate::CONTRACT_VERSION);
+}
+
+/// Non-governor cannot upgrade: a native auth trap, demonstrated
+/// directly with no auth mocking at all (a plain `Address::generate`
+/// as governor here, not `setup`'s own `MockGovernor` contract - the
+/// point is only that `require_auth` genuinely checks, same as every
+/// other no-mock test in this workspace).
+#[test]
+#[should_panic]
+fn upgrade_without_governor_auth_traps() {
+    let env = Env::default();
+    // No mock_all_auths() of any kind: require_auth genuinely checks.
+    let governor = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let factory = Address::generate(&env);
+    let usdc = Address::generate(&env);
+    let contract_id = env.register(EventRegistry, ());
+    let client = EventRegistryClient::new(&env, &contract_id);
+    client.initialize(&governor, &oracle, &staking, &factory, &usdc);
+
+    let new_wasm_hash = env.upload(EventRegistry);
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.upgrade(&new_wasm_hash);
+}
+
+/// Upgrading to new code (a fresh wasm hash, uploaded via `env.upload`
+/// per soroban-sdk's own documented pattern for exercising
+/// `update_current_contract` in a unit test without a compiled .wasm
+/// fixture) keeps all existing storage: a registered event definition
+/// still reads back correctly through the same client and address
+/// after it.
+#[test]
+fn upgrade_keeps_existing_storage() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let asset = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    fx.oracle
+        .add_asset(&asset_config(&env, &asset, &issuer, IssuerFlags::default()));
+    fx.client
+        .register_definition(&depeg_definition(&env, &asset));
+    let version_before = fx.client.current_version(&asset, &EventKind::Depeg);
+
+    let new_wasm_hash = env.upload(EventRegistry);
+    fx.client.upgrade(&new_wasm_hash);
+
+    assert_eq!(
+        fx.client.current_version(&asset, &EventKind::Depeg),
+        version_before,
+        "current_version(asset, kind) must read the same after an upgrade with no storage-shape change"
+    );
+    assert_eq!(
+        fx.client.version(),
+        crate::CONTRACT_VERSION,
+        "the re-uploaded code is the same crate, so its own version() constant is unchanged"
+    );
+}
+
+/// `migrate()` can't run twice for the same target version.
+#[test]
+fn migrate_cannot_run_twice_for_the_same_version() {
+    let env = Env::default();
+    let fx = setup(&env);
+    fx.client.migrate(&1);
+    let result = fx.client.try_migrate(&1);
+    assert_eq!(result, Err(Ok(Error::AlreadyMigrated)));
+}
+
+/// Non-governor cannot migrate: same native auth trap pattern as
+/// `upgrade_without_governor_auth_traps`.
+#[test]
+#[should_panic]
+fn migrate_without_governor_auth_traps() {
+    let env = Env::default();
+    let governor = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let staking = Address::generate(&env);
+    let factory = Address::generate(&env);
+    let usdc = Address::generate(&env);
+    let contract_id = env.register(EventRegistry, ());
+    let client = EventRegistryClient::new(&env, &contract_id);
+    client.initialize(&governor, &oracle, &staking, &factory, &usdc);
+
+    // No mock_all_auths(): the governor never actually signs this call.
+    client.migrate(&1);
+}

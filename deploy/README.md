@@ -360,3 +360,134 @@ step still lets a successful posting pass stand, logs the TTL failure
 clearly, and the combined script exits 1 so Railway shows it as a
 crashed run (worth investigating, but never at the cost of a posting
 pass that already succeeded).
+
+## Upgrading a contract (issue #12)
+
+Every core contract (`RiskOracle`, `EventRegistry`, `Treasury`,
+`Staking`) exposes `upgrade(new_wasm_hash)`, `version()`, and
+`migrate(target_version)`, per technical-doc.md Section 17.3. The
+actual swap and the `Upgraded` event live in one shared implementation,
+`sylox_types::upgrade::do_upgrade` / `do_migrate`; each contract's own
+`upgrade()`/`migrate()` is a 2-3 line wrapper that checks its own
+`config.governor.require_auth()` first (each contract's `Config` and
+`Error` are distinct types this shared module cannot name generically,
+so the auth check and the `AlreadyMigrated` mapping stay in the
+caller).
+
+**Procedure, per contract:**
+
+1. **Build and upload the new WASM.**
+   ```
+   stellar contract upload --wasm target/wasm32v1-none/release/<contract>.wasm \
+     --source-account <upgrading identity> --network testnet
+   ```
+   This prints the new WASM's hash. Record it.
+2. **Call `upgrade`**, authorized by the contract's own governor:
+   ```
+   stellar contract invoke --id <contract id> --source-account <governor identity> \
+     --network testnet -- upgrade --new_wasm_hash <new hash from step 1>
+   ```
+3. **Verify `version()`** reads the new value (bumped by hand in the
+   new code, alongside the `upgrade()` that ships it):
+   ```
+   stellar contract invoke --id <contract id> --source-account <any identity> \
+     --network testnet --send=no -- version
+   ```
+4. **Update `deployments/testnet.json`** with the new `wasm_hash` for
+   that contract (and the old one, kept alongside it in a `history`
+   list or similar, for the full audit trail - the on-chain `Upgraded`
+   event itself only carries `old_version`, a small integer, never a
+   wasm hash: there is no SDK call that reads a contract's own current
+   wasm hash from within its own execution, so the event cannot verify
+   one even if a caller supplied it).
+
+**Known gap: no 14 day timelock.** Section 17.2 assigns `Upgrade` a 14
+day timelock through `Governor` for every core contract, and
+specifically calls out `Staking` and `Treasury` (they hold funds) as
+needing it. `Governor` is not built yet (`contracts/governor` is a
+stub - multisig, timelock queue, upgrade execution, all `todo!()`).
+Until it exists, `upgrade()`/`migrate()` here are direct,
+immediately-effective governor-gated calls, the same pattern every
+other governor-gated call in this codebase already uses - there is no
+queueing, approval threshold, or waiting period of any kind. Tracked
+against the `Governor` work; once `Governor` exists, these calls
+route through its own `Action::Upgrade` queue instead (already spec'd
+in `sylox_types::governance::Action`, unused today).
+
+**Migration notes.** Every future upgrade that changes a stored
+type's own shape must ship with a migration note here (what changed,
+which keys, how `migrate()` fixes them up) and a storage test proving
+existing keys still decode under the new types (see
+`upgrade_keeps_existing_storage` in each contract's own `test.rs` for
+the pattern this repeats: write real data under the OLD code, swap to
+a fresh wasm hash via `env.upload`, read the same keys back through
+the same client and confirm they still decode correctly). No storage
+shape changes ship with issue #12 itself; `migrate()` is wired and
+tested but its own body is empty until a future upgrade needs it.
+
+### The live contracts cannot be upgraded yet
+
+The contracts already deployed to testnet (`deployments/testnet.json`)
+do not have `upgrade()` at all - adding it, like any other function
+addition, requires one more redeploy under fresh addresses before
+`upgrade()` becomes available for every fix after this one. **Do not
+run this redeploy without an explicit go-ahead; nothing below is
+scheduled.**
+
+**Everything that needs re-running, in order, once approved:**
+
+1. `deploy/deploy.sh testnet` - fresh contract addresses, fresh
+   `deployments/testnet.json`.
+2. The 71 hour USDC backfill (`deploy/post-demo-signals.sh testnet
+   71`), oldest first, same ordering constraint as the original
+   deploy (`deploy/smoke-testnet.sh` AFTER the backfill, never before
+   - see this file's own "Why the order matters" section).
+3. DEMOUSD setup from scratch: `deploy/demo-asset.sh testnet`, then
+   `deploy/demo-asset-trigger.sh testnet` (a fresh holder, a fresh
+   mint, a fresh real revocation/clawback - this script is not meant
+   to be re-run against an existing holder, see its own header), then
+   `deploy/demo-asset-propose.sh testnet` once the triggering signal's
+   dispute window has passed.
+4. The TTL entries: `deploy/extend-ttl.sh testnet` once, by hand, right
+   after the backfill and DEMOUSD setup (every tracked entry starts
+   with a fresh, short TTL on a brand new deploy, same as the original
+   measurement for issue #28 found).
+5. The live poster's own `deployments/testnet.json`: the Railway cron
+   service's image bakes this file in at build time
+   (`deploy/Dockerfile.live-poster`'s own `COPY`); a redeploy means a
+   new CI run has to actually ship before `sylox-live-poster`'s next
+   scheduled tick posts against the right, new addresses, not the old
+   ones.
+6. The web app's own contract bindings
+   (`web/app/scripts/generate-bindings.mjs`) regenerated against the
+   new contract IDs, committed, and `sylox-app` redeployed.
+
+**What is lost, with no way to carry it forward:**
+
+- **`EventRegistry` event 0 and its finalize history** - the real
+  DEMOUSD IssuerFreeze event this session's work produced. A fresh
+  deploy starts `NextEventId` back at 0; the old event's own id, its
+  ruling/cure history, and the real transaction trail linking it to
+  the actual on-chain revocation and clawback are gone from the new
+  contract (still findable on stellar.expert against the OLD contract
+  address, for as long as that address and its own history stay
+  queryable, but no longer reachable through `event(id)` on whichever
+  address is live after the redeploy).
+- **DEMOUSD's current state** - the holder's remaining balance, the
+  issuer's clawback/revocation history, all of it tied to the OLD
+  `EventRegistry`/`RiskOracle` addresses DEMOUSD's own definition and
+  canonical version were registered against. Step 3 above is a full
+  reset, not a migration: a fresh holder, a fresh mint, a fresh real
+  trigger.
+- **USDC's scoring progress toward the Oct 14 start** - `FirstEpoch`,
+  the ring buffer's accumulated history, `NewestFinal`, all reset to
+  nothing on the new `RiskOracle` address. The 7 day score baseline
+  and the 168-epoch Tier 1 windows start counting from zero again from
+  whenever the new 71 hour backfill (step 2) finishes, not from
+  wherever the old deploy's own history had already gotten to.
+
+**Fold issue #21 (constructor instead of `initialize`) into this same
+redeploy if it is ready in time** - both need fresh contract addresses
+anyway, so doing them together avoids a second full redeploy and a
+second round of everything above. If #21 is not ready, this redeploy
+goes ahead without it; #21 does not hold up #12.

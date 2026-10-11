@@ -64,7 +64,7 @@ mod error;
 mod events;
 mod storage;
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, Vec};
 use sylox_types::{
     AssetEventStatus, BondKey, CoverGate, EventDefinition, EventKind, EventRecord, EventState,
     IssuerFlags, SlotState,
@@ -123,6 +123,13 @@ use sylox_types::time::MAX_CURE_EPOCHS;
 #[contract]
 pub struct EventRegistry;
 
+/// Issue #12. Bump by hand on every `upgrade()` this contract ships.
+const CONTRACT_VERSION: u32 = 1;
+/// Issue #12. Instance key for `sylox_types::upgrade::do_migrate`'s own
+/// "which version has this contract's storage already been migrated to"
+/// marker.
+const MIGRATED_TO_KEY: Symbol = symbol_short!("MIGRATE");
+
 #[contractimpl]
 impl EventRegistry {
     pub fn initialize(
@@ -146,6 +153,41 @@ impl EventRegistry {
                 usdc,
             },
         );
+        Ok(())
+    }
+
+    /// Issue #12. The currently deployed code's own version, bumped by
+    /// hand alongside each `upgrade()` this contract ships (see deploy/
+    /// README.md's upgrade procedure). Lets anyone confirm what is
+    /// actually deployed without guessing from a wasm hash.
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
+    /// technical-doc.md Section 17.3: "Core contracts expose
+    /// upgrade(wasm_hash), callable only by the governor." After 12
+    /// months on mainnet, Section 17.3 also notes governance plans to
+    /// remove `upgrade` from `EventRegistry` entirely (deploying v2
+    /// alongside instead); not relevant yet on testnet.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        let config = Self::require_config(&env)?;
+        config.governor.require_auth();
+        sylox_types::upgrade::do_upgrade(&env, CONTRACT_VERSION, new_wasm_hash);
+        Ok(())
+    }
+
+    /// Issue #12. Storage migration hook for a future `upgrade()`: runs
+    /// at most once per `target_version`. Empty for now - no storage
+    /// shape change ships with this PR - but every future upgrade that
+    /// DOES change a stored type's shape migrates existing data here,
+    /// gated the same way, with its own storage test (existing keys
+    /// decode under the new types) alongside it.
+    pub fn migrate(env: Env, target_version: u32) -> Result<(), Error> {
+        let config = Self::require_config(&env)?;
+        config.governor.require_auth();
+        if !sylox_types::upgrade::do_migrate(&env, &MIGRATED_TO_KEY, target_version) {
+            return Err(Error::AlreadyMigrated);
+        }
         Ok(())
     }
 
