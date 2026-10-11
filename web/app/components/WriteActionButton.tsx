@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useWallet } from "@/lib/wallet/WalletContext";
 import { stellarExpertTxUrl } from "@/lib/stellar-expert";
-import type { Prepared } from "@/lib/event-actions";
+import type { Prepared } from "@sylox/sdk";
 
 type Step =
   | { kind: "idle" }
@@ -15,8 +15,16 @@ type Step =
 
 export interface WriteActionButtonProps<T> {
   label: string;
-  /** Simulates the write for the given (already-connected) address and throws a plain-language error if it would be rejected. Called on the first click, and again automatically if the connected address changes before confirm. */
-  prepare: (address: string) => Promise<Prepared<T>>;
+  /**
+   * Simulates the write for the given (already-connected) signer and
+   * throws a plain-language error if it would be rejected. Called on
+   * the first click, and again automatically if the connected address
+   * changes before confirm. Takes the full signer (not just the bare
+   * address) because @sylox/sdk's prepare* functions need it up front -
+   * a restore transaction (if simulation ever reports one is genuinely
+   * needed) must be signable at prepare time, not merely by confirm.
+   */
+  prepare: (signer: { publicKey: string; signTransaction: ReturnType<typeof useWallet>["signTransaction"] }) => Promise<Prepared<T>>;
   /** Signs and sends the already-prepared transaction. Called only after the simulated result was shown and the visitor confirms. */
   confirm: (prepared: Prepared<T>, signer: { publicKey: string; signTransaction: ReturnType<typeof useWallet>["signTransaction"] }) => Promise<{ txHash: string }>;
   /** True while this action doesn't apply right now (e.g. Finalize before the challenge window closes) - disables the button with no network call at all. */
@@ -57,7 +65,7 @@ export function WriteActionButton<T>({
     if (!address) return; // Render-gated below too, but never trust the gate alone for the actual call.
     setStep({ kind: "simulating" });
     try {
-      const result = await prepare(address);
+      const result = await prepare({ publicKey: address, signTransaction });
       setPrepared(result);
       setStep({ kind: "ready-to-confirm" });
     } catch (e) {
@@ -75,7 +83,7 @@ export function WriteActionButton<T>({
         // transaction's source account no longer matches who's about
         // to sign, so it's discarded and re-simulated against the
         // current address rather than ever being signed as-is.
-        toConfirm = await prepare(address);
+        toConfirm = await prepare({ publicKey: address, signTransaction });
         setPrepared(toConfirm);
       }
       const { txHash } = await confirm(toConfirm, { publicKey: address, signTransaction });

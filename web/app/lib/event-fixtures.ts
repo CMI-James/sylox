@@ -16,7 +16,7 @@
  * final outcome (Cured, Declared).
  */
 import type { EventPageData } from "./event-data";
-import type { EventRecord, CureProgress } from "./contracts/event-registry";
+import type { EventRecord, CureProgress } from "@sylox/sdk";
 
 const FIXTURE_ASSET = "CDUMMY00000000000000000000000000000000000000000000FIXTUR";
 

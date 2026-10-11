@@ -140,14 +140,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # Installs web/app, web/landing and web/shared/ui (npm workspaces
-      # declared in the repo-root package.json) in one pass. web/app's
-      # lib/contracts/*/src bindings are generated locally via
-      # `stellar contract bindings typescript` against live testnet and
-      # committed (see web/app/scripts/generate-bindings.mjs) - CI has
-      # no network path to regenerate them, so it builds against the
-      # committed copy like any other source file.
+      # Installs web/app, web/landing, web/shared/ui and packages/sdk
+      # (npm workspaces declared in the repo-root package.json) in one
+      # pass.
       - run: npm ci
+      # web/app depends on @sylox/sdk's own compiled dist/ output (its
+      # package.json points "types"/"main" there, not at raw src/ - see
+      # packages/sdk/package.json's own comment on why, unlike
+      # web/shared/ui, this package needs a real build step). This job
+      # runs on its own fresh runner, with no filesystem overlap with
+      # the separate `sdk` job below (and no `needs:` between them
+      # either) - so without this step, web/app's own typecheck/build
+      # below fails with "Cannot find module '@sylox/sdk'" against a
+      # clean checkout, even though it can look fine locally if a
+      # developer's own packages/sdk/dist/ happens to already exist
+      # from an unrelated earlier build.
+      - name: Build packages/sdk
+        run: npm run build -w packages/sdk
       - name: Typecheck web/shared/ui
         run: npx tsc --noEmit
         working-directory: web/shared/ui
@@ -176,6 +185,28 @@ jobs:
         run: npm run build -w web/landing
       - name: Build web/app
         run: npm run build -w web/app
+
+  docker-build-sylox-app:
+    name: build web/app/Dockerfile image (no push)
+    runs-on: ubuntu-latest
+    # CI's own web/sdk jobs above build each workspace separately with
+    # whatever's already on the runner's npm cache - they don't catch a
+    # Dockerfile itself going stale (e.g. a COPY line naming a
+    # package.json path that a PR deletes, or a build step ordering
+    # that only "works" locally because an unrelated dist/ already
+    # exists on disk). Building the real image here, on every PR, is
+    # the only thing that actually exercises the Dockerfile's own COPY
+    # list and build steps from a clean checkout - never pushed
+    # anywhere, just proves it builds.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build web/app's Docker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: web/app/Dockerfile
+          push: false
 
   sdk:
     name: packages/sdk (typecheck, test, build, networks drift check)
@@ -228,7 +259,7 @@ jobs:
     # passed - a broken contract build or a failing Rust test on main
     # blocks this exactly like it blocks everything else.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk, extend-ttl-ledgers-to-days-test]
+    needs: [fmt, clippy, test, build-contracts, web, extend-ttl-jq-test, sdk, extend-ttl-ledgers-to-days-test, docker-build-sylox-app]
     # One deploy at a time, in order - a second push landing while the
     # first is still deploying queues behind it instead of racing it
     # (never cancel-in-progress: a deploy that's already uploading to
@@ -268,7 +299,7 @@ jobs:
             changed=$(git diff --name-only "$before" "${{ github.sha }}")
             echo "Changed files ($before..${{ github.sha }}):"
             echo "$changed"
-            if echo "$changed" | grep -qE '^(web/app/|web/shared/|deployments/|package\.json$|package-lock\.json$)'; then
+            if echo "$changed" | grep -qE '^(web/app/|web/shared/|packages/sdk/|deployments/|package\.json$|package-lock\.json$)'; then
               echo "relevant=true" >> "$GITHUB_OUTPUT"
             else
               echo "relevant=false" >> "$GITHUB_OUTPUT"

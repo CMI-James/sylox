@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WriteActionButton } from "./WriteActionButton";
 import { WalletProvider } from "@/lib/wallet/WalletContext";
-import type { Prepared } from "@/lib/event-actions";
+import type { Prepared } from "@sylox/sdk";
 
 // Every test in this file either connects through the real picker
 // flow (and overrides restoreWalletSilently itself via its own
@@ -110,7 +110,7 @@ describe("WriteActionButton - connected flow", () => {
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
     const user = userEvent.setup();
-    const prepare = vi.fn(async (address: string): Promise<Prepared<{ id: string }>> => ({
+    const prepare = vi.fn(async ({ publicKey: address }: { publicKey: string }): Promise<Prepared<{ id: string }>> => ({
       tx: { id: "tx-1" },
       preparedFor: address,
     }));
@@ -129,7 +129,7 @@ describe("WriteActionButton - connected flow", () => {
 
     await connectWallet(user, "Connect wallet to checkpoint");
     await user.click(screen.getByRole("button", { name: "Checkpoint" }));
-    expect(prepare).toHaveBeenCalledWith(ADDRESS_A);
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ publicKey: ADDRESS_A }));
 
     await user.click(await screen.findByRole("button", { name: /confirm.*sign/i }));
     await waitFor(() => expect(confirm).toHaveBeenCalled());
@@ -182,7 +182,7 @@ describe("WriteActionButton - connected flow", () => {
     const { WalletButton: FreshWalletButton } = await import("./WalletButton");
 
     const user = userEvent.setup();
-    const prepare = vi.fn(async (address: string): Promise<Prepared<{ id: string }>> => ({
+    const prepare = vi.fn(async ({ publicKey: address }: { publicKey: string }): Promise<Prepared<{ id: string }>> => ({
       tx: { id: `tx-for-${address}` },
       preparedFor: address,
     }));
@@ -204,7 +204,7 @@ describe("WriteActionButton - connected flow", () => {
     await connectWallet(user, "Connect wallet");
     await user.click(screen.getByRole("button", { name: "Checkpoint" }));
     await screen.findByRole("button", { name: /confirm.*sign/i });
-    expect(prepare).toHaveBeenLastCalledWith(ADDRESS_A);
+    expect(prepare).toHaveBeenLastCalledWith(expect.objectContaining({ publicKey: ADDRESS_A }));
 
     // Switch wallets: disconnect, then reconnect as B - same real UI
     // path a visitor would use to switch accounts, not a direct state
@@ -219,7 +219,7 @@ describe("WriteActionButton - connected flow", () => {
     await user.click(screen.getByRole("button", { name: /confirm.*sign/i }));
     await waitFor(() => expect(confirm).toHaveBeenCalled());
 
-    expect(prepare).toHaveBeenLastCalledWith(ADDRESS_B);
+    expect(prepare).toHaveBeenLastCalledWith(expect.objectContaining({ publicKey: ADDRESS_B }));
     expect(confirm.mock.calls[0][0]).toEqual({ tx: { id: "tx-for-GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP" }, preparedFor: ADDRESS_B });
     expect(confirm.mock.calls[0][1].publicKey).toBe(ADDRESS_B);
     // Never signed the transaction that was built for the old address.
@@ -247,7 +247,7 @@ describe("WriteActionButton - connected flow", () => {
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
     const user = userEvent.setup();
-    const prepare = vi.fn(async (address: string): Promise<Prepared<{ id: string }>> => ({
+    const prepare = vi.fn(async ({ publicKey: address }: { publicKey: string }): Promise<Prepared<{ id: string }>> => ({
       tx: { id: "tx-1" },
       preparedFor: address,
     }));
@@ -301,7 +301,7 @@ describe("WriteActionButton - connected flow", () => {
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
     const user = userEvent.setup();
-    const prepare = vi.fn(async (address: string): Promise<Prepared<{ id: string }>> => ({
+    const prepare = vi.fn(async ({ publicKey: address }: { publicKey: string }): Promise<Prepared<{ id: string }>> => ({
       tx: { id: "tx-1" },
       preparedFor: address,
     }));
@@ -348,7 +348,7 @@ describe("WriteActionButton - connected flow", () => {
     const { WriteActionButton: FreshButton } = await import("./WriteActionButton");
 
     const user = userEvent.setup();
-    const prepare = vi.fn(async (address: string): Promise<Prepared<{ id: string }>> => ({
+    const prepare = vi.fn(async ({ publicKey: address }: { publicKey: string }): Promise<Prepared<{ id: string }>> => ({
       tx: { id: "tx-1" },
       preparedFor: address,
     }));

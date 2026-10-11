@@ -1,10 +1,17 @@
-import { riskOracleClient } from "./contracts/risk-oracle";
-import { assetDisplayName } from "./contracts/token";
+import { Networks, assetDisplayName, riskOracleClient } from "@sylox/sdk";
+import { al } from "./sylox-client";
 import { riskBandFor } from "./band";
-import { extractErrorCode, describeScoreError } from "./contract-errors";
 import type { RiskBand } from "@sylox/ui/risk-bands";
 
 const PEG_RATIO_SCALE = 10_000_000; // i128, scale 1e7 (lib/contracts/risk-oracle's own doc comment on peg_ratio).
+
+// RiskOracle.event_in_progress/asset_config have no al.oracle wrapper
+// (see lib/asset-data.ts's own top-of-file doc comment for the full
+// reasoning) - read directly via the same riskOracleClient this file's
+// sibling asset-data.ts uses for the identical gap.
+function oracleContract() {
+  return riskOracleClient(Networks.Testnet);
+}
 
 export interface ExplorerAssetRow {
   asset: string;
@@ -63,29 +70,26 @@ function codeFromDisplayName(name: string, asset: string): string {
   return code && code !== name ? code : `${asset.slice(0, 4)}…${asset.slice(-4)}`;
 }
 
-async function fetchRow(
-  oracle: ReturnType<typeof riskOracleClient>,
-  asset: string,
-): Promise<ExplorerAssetRow> {
-  const [scoreTx, staleTx, inProgressTx, latestTx, configTx, name] = await Promise.all([
-    oracle.score({ asset }),
+async function fetchRow(asset: string): Promise<ExplorerAssetRow> {
+  const oracle = oracleContract();
+
+  const [riskScore, staleTx, inProgressTx, latest, configTx, name] = await Promise.all([
+    // al.oracle.score() already throws a SyloxError on the contract's
+    // Err case - the old isErr()-check-then-describe*Error pattern
+    // isn't needed any more; letting it propagate here is caught by
+    // fetchExplorerData's own Promise.allSettled below, same
+    // per-asset-failure isolation as before.
+    al.oracle.score(asset),
     oracle.check_stale({ asset }),
     oracle.event_in_progress({ asset }),
-    oracle.latest({ asset }),
+    al.oracle.latest(asset),
     oracle.asset_config({ asset }),
-    assetDisplayName(asset),
+    assetDisplayName(Networks.Testnet, asset),
   ]);
-
-  const scoreResult = scoreTx.result;
-  if (scoreResult.isErr()) {
-    throw new Error(`Couldn't read this asset's score: ${describeScoreError(extractErrorCode(scoreTx))}`);
-  }
-  const riskScore = scoreResult.unwrap();
 
   const staleResult = staleTx.result;
   const stale = staleResult.isErr() ? true : staleResult.unwrap();
 
-  const latest = latestTx.result;
   const pegRatio = latest ? Number(latest.peg_ratio) / PEG_RATIO_SCALE : null;
 
   const config = configTx.result;
@@ -115,15 +119,12 @@ async function fetchRow(
  * rest of the grid still renders.
  */
 export async function fetchExplorerData(): Promise<ExplorerData> {
-  const oracle = riskOracleClient();
-
-  const assetsTx = await oracle.assets();
-  const assets = assetsTx.result;
+  const assets = await al.oracle.assets();
 
   const rows: ExplorerAssetRow[] = [];
   const errors: ExplorerAssetError[] = [];
 
-  const results = await Promise.allSettled(assets.map((asset) => fetchRow(oracle, asset)));
+  const results = await Promise.allSettled(assets.map((asset) => fetchRow(asset)));
 
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {

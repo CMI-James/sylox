@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { EventPageClient, loadData } from "./EventPageClient";
 import { WalletProvider } from "@/lib/wallet/WalletContext";
 import type { EventPageData } from "@/lib/event-data";
-import type { EventRecord } from "@/lib/contracts/event-registry";
+import type { EventRecord } from "@sylox/sdk";
 
 function renderEventPage(eventId: string) {
   return render(
@@ -229,13 +229,13 @@ describe("EventPageClient", () => {
         restoreWalletSilently: vi.fn(async () => null),
       };
     });
-    vi.doMock("@/lib/event-actions", async () => {
-      const actual = await vi.importActual<typeof import("@/lib/event-actions")>("@/lib/event-actions");
+    vi.doMock("@sylox/sdk", async () => {
+      const actual = await vi.importActual<typeof import("@sylox/sdk")>("@sylox/sdk");
       return {
         ...actual,
-        prepareFinalize: vi.fn(async (_eventId: bigint, address: string) => ({
+        prepareFinalize: vi.fn(async (_network: unknown, _eventId: bigint, signer: { publicKey: string }) => ({
           tx: {},
-          preparedFor: address,
+          preparedFor: signer.publicKey,
         })),
         confirmFinalize: vi.fn(async () => ({ result: undefined, txHash: "abc123" })),
       };
@@ -274,6 +274,6 @@ describe("EventPageClient", () => {
     expect(screen.getByText(/finalize: done/i)).toBeInTheDocument();
 
     vi.doUnmock("@/lib/wallet/kit");
-    vi.doUnmock("@/lib/event-actions");
+    vi.doUnmock("@sylox/sdk");
   });
 });

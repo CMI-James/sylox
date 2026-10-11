@@ -9,13 +9,12 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bindings:generate": "node scripts/generate-bindings.mjs",
     "smoke:write-path": "vitest run --config vitest.smoke.config.ts"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.7.1",
     "@stellar/freighter-api": "6.0.0",
-    "@stellar/stellar-sdk": "17.2.1",
+    "@sylox/sdk": "*",
     "@sylox/ui": "*",
     "next": "16.4.0",
     "react": "19.3.0",
