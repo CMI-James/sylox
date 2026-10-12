@@ -28,7 +28,7 @@ export const GENERATED_TESTNET_NETWORK = {
     "contract_id": "CAPGF3AMXYKRJ6CBONVDRIB7NZNP4HPNLJ5U5YKQ67CC5IWRG435PGT3",
     "asset_code": "DEMOUSD",
     "issuer": "GAZHWYDFGFK2JDE4K74PVCZ6WTLG4IULZ2FFVEYIZDT2JK2YPHJUQP4L",
-    "holder": "GCINECIQIQW3W4TTGVFMK7DGTHXYMD22PNYNF5LLJOES3EWDIDM5VFSG",
+    "holder": "GDYENF26KRD2LZHQRLNSUWRLUQ6ASJUJNTXQYOEZDUESMVTUNBFQ66AW",
     "note": "SAMPLE asset only, auth_revocable + clawback_enabled, never real value. Never call this a real stablecoin."
   },
 } as const;

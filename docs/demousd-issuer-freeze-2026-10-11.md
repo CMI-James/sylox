@@ -103,28 +103,91 @@ not 497709, their own real hour). Fixed by deriving the triggering
 epoch from the real transactions' own `created_at` instead
 (`read_tx_epoch()`).
 
-## Plan for epochs 497708 and 497709 (pending)
+## Epochs 497708 and 497709, posted for real on 2026-10-11
 
-- **Epoch 497708** (the gap hour, immediately before the real action
-  hour): a plain post, no issuer actions, supply carried forward from
-  497707's own real stored supply (2,500,000,000), `supply_change_bps
-  = 0` - correct by construction, since this post deliberately
-  carries the same figure forward unchanged. Fills the gap between the
-  backfill and the triggering post so `check_supply_change_consistency`
-  has a real, contiguous previous slot to compare the trigger against.
-- **Epoch 497709** (the real action hour): `supply = 2,000,000,000`
-  (real, read from Horizon after the clawback), `supply_change_bps =
-  -2000` (real, against 497708's own stored 2,500,000,000),
-  `clawback_amount = 500,000,000` (real, from the clawback
-  transaction's own effects), `auth_revocations = 1`, `clawbacks = 1`.
+Both posted by `deploy/demo-asset-trigger.sh testnet`, signed by the
+`sylox-testnet-keeper` identity:
 
-Neither has posted yet. **Pending, filled in by the follow-up PR once
-this run actually executes for real:**
+| Epoch | Action | Transaction hash | stellar.expert |
+|---|---|---|---|
+| 497708 (gap-fill, 22:34:47Z) | Plain post, no issuer actions, `supply = 2,500,000,000` carried forward from 497707's own stored supply, `supply_change_bps = 0` | `184077b854cf955a516b73ae47d7498bc9d34bb38cd1c0034d766c7f0a82cdf9` | https://stellar.expert/explorer/testnet/tx/184077b854cf955a516b73ae47d7498bc9d34bb38cd1c0034d766c7f0a82cdf9 |
+| 497709 (triggering post, 22:35:02Z) | `supply = 2,000,000,000`, `supply_change_bps = -2000` (real, against 497708's own stored 2,500,000,000), `clawback_amount = 500,000,000`, `auth_revocations = 1`, `clawbacks = 1` | `60bcc5b444d8c936c29a9c95283850dd3b0bed9668f2b8cc219c4fa527de5a09` | https://stellar.expert/explorer/testnet/tx/60bcc5b444d8c936c29a9c95283850dd3b0bed9668f2b8cc219c4fa527de5a09 |
 
-- Event id: _pending_
-- Triggering post's own transaction hash: _pending_
-- Final on-chain state (`EventRegistry.event(0)`'s own `state`,
-  `NextEventId` afterward): _pending_
+Both read back directly from `RiskOracle.signals(DEMOUSD, epoch)` after posting, confirming the real stored values matched exactly what was planned.
 
-Nothing further goes on-chain until this PR is approved, merged, and
-there is an explicit go-ahead to run the trigger for real.
+## An extra, unplanned transaction during this run
+
+The same run also submitted one real transaction outside the plan:
+a repeat `change-trust` to the holder's already-open DEMOUSD
+trustline, `22a92ebd14e25111ab9f897ec0e0c23ac026548ff45b616adf11966315558877`
+(https://stellar.expert/explorer/testnet/tx/22a92ebd14e25111ab9f897ec0e0c23ac026548ff45b616adf11966315558877).
+
+Root cause: `demo-asset-trigger.sh`'s step 1 computed whether the
+trustline already existed only to choose its own plan line's wording
+("already done" vs. "will submit"), then ran `change-trust`
+unconditionally whenever not in `--dry-run` - with no gate tying the
+actual submission to that same decision. The plan printed "trustline:
+already done" moments before the code submitted it anyway. Every
+other step in the script already nested its real submission inside
+the same branch that decided "already done" vs. "will submit"; the
+trustline step was the one exception.
+
+Confirmed harmless: a repeat `change-trust` to an already-open
+trustline with the same limit and flags is a genuine Stellar no-op.
+The holder's trustline authorization state and balance were unchanged
+before and after; the transaction only incremented the account's own
+sequence number. Fixed in PR #76 ("one gate per step"): every step
+now decides once whether it is done, and a `note_submission()` guard
+dies immediately if a step ever submits after its own plan said
+"already done" - verified by hand to catch the exact bug that caused
+this.
+
+## The proposal and the finalize
+
+`propose_tier1(DEMOUSD, IssuerFreeze, version 1)`, signed by
+`sylox-testnet-admin` (`GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP`),
+submitted 2026-10-12T00:43:57Z, after confirming `RiskOracle.is_final(DEMOUSD, 497709)`
+read `true` (effectively Final, no dispute - checked at 00:36:26Z,
+after the triggering post's own 2-hour `signal_dispute_secs` window
+closed at 00:35:02Z) and simulating the call read-only first:
+
+| Action | Transaction hash | stellar.expert |
+|---|---|---|
+| `propose_tier1` | `bd4c9df7e288080aaa22aa95a16ee1bdbb47dbd6ea9734a1f9663f8e5b3515fb` | https://stellar.expert/explorer/testnet/tx/bd4c9df7e288080aaa22aa95a16ee1bdbb47dbd6ea9734a1f9663f8e5b3515fb |
+
+Resulting event, read back immediately after:
+
+```json
+{"asset":"CAPGF3AMXYKRJ6CBONVDRIB7NZNP4HPNLJ5U5YKQ67CC5IWRG435PGT3","bond":"0","declared_at":null,"def_version":1,"escalated_at":null,"evidence_hash":"0000...0000","id":0,"kind":"IssuerFreeze","proposed_at":1791765837,"proposer":"GBXYFBRIS5M7S2UDQ64AE4QHSJG7UIN6VRPDDAEBKP724V344GAL5MJP","state":"Proposed","tier":1,"window_start":1791752400}
+```
+
+`window_start` (1791752400) is 2026-10-11T21:00:00Z - the start of
+epoch 497709, the only epoch in the 168-epoch baseline window with
+real issuer-action data.
+
+The 1-hour challenge window (`challenge_secs = 3600` from the
+registered IssuerFreeze definition) closed at 2026-10-12T01:43:57Z
+with no challenge raised. **David finalized the event from the
+`sylox-app` UI's own "Finalize" button** (`finalize(event_id)` takes
+no `caller` and performs no auth check at all - genuinely
+permissionless, callable by anyone once the challenge window has
+closed, confirmed by reading `contracts/event-registry/src/lib.rs`'s
+own `finalize` function):
+
+| Action | Transaction hash | Signer | stellar.expert |
+|---|---|---|---|
+| `finalize(0)` | `bffca97e566b0b8963dd87ce0feba8313b6cdfa7ab75396959b144b1b5547859` | `GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ` (David's own wallet, via the app UI - distinct from `sylox-testnet-admin`) | https://stellar.expert/explorer/testnet/tx/bffca97e566b0b8963dd87ce0feba8313b6cdfa7ab75396959b144b1b5547859 |
+
+## Final state
+
+Read back directly from the contract after finalize:
+
+- **Event 0 state**: `Declared` (not `Cured` - `cure_outcome` always
+  resolves to `Declared` for a non-`Depeg` kind, `contracts/event-registry/src/lib.rs`)
+- **`declared_at`**: `1791769637` = 2026-10-12T01:47:17Z
+- **`EventRegistry.NextEventId`**: `1`
+- **`RiskOracle.band(DEMOUSD)`**: `"Event"`, confirmed directly from
+  the contract after finalize
+
+This event's own full lifecycle (mint, backfill, gap-fill, trigger,
+propose, finalize) is now complete and on-chain.
