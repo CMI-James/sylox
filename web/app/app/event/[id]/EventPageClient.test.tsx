@@ -192,6 +192,42 @@ describe("EventPageClient", () => {
     expect(screen.queryByText(/only applies to an event that's still proposed/i)).not.toBeInTheDocument();
   });
 
+  it("re-enables Finalize at the right second once the deadline passes, with no refetch - not just when the text happens to read 'Available now'", async () => {
+    vi.useFakeTimers();
+    try {
+      const nowSecs = Math.floor(Date.now() / 1000);
+      const deadline = BigInt(nowSecs + 90); // 90s out - inside the window at mount
+      fetchEventPageData.mockResolvedValue(
+        buildEventData({ state: "Proposed", countdown: { status: "ok", value: { phase: "challenge", deadline } } }),
+      );
+      renderEventPage("42");
+
+      await vi.waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Finalize" })).toBeDisabled();
+      expect(fetchEventPageData).toHaveBeenCalledTimes(1);
+
+      // data.countdown is fetched once at mount and never refetched by
+      // this test (the bug this covers: useAvailableIn's own ticking
+      // "now" has to be what flips challengeWindowOpen, since the fetched
+      // deadline itself never changes) - advancing real time past the
+      // deadline, with no action that would trigger a refetch, is the
+      // actual regression case: a visitor who just leaves the tab open.
+      await vi.advanceTimersByTimeAsync(95_000);
+
+      // WriteActionButton renders "Connect wallet to finalize" (not the
+      // plain disabled "Finalize" label) exactly when disabled is false
+      // and no wallet is connected - this is the enabled-button render
+      // path, not a coincidentally similar disabled one.
+      expect(screen.getByRole("button", { name: /connect wallet to finalize/i })).toBeInTheDocument();
+      expect(screen.queryByText(/challenge window open/i)).not.toBeInTheDocument();
+      // Still exactly one fetch - the button re-enabled itself from the
+      // tick alone, not from a new page load.
+      expect(fetchEventPageData).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps Finalize enabled once the challenge window has actually closed, even while still Proposed", async () => {
     // A real "effectively Final" window: Proposed, but finalize()'s own
     // deadline check would already pass - the countdown API models this

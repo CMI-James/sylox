@@ -275,8 +275,18 @@ function formatAvailableIn(seconds: number): string {
   return `Available in ${minutes}m`;
 }
 
-/** Ticks once a second toward `deadline` - same tick cadence as Countdown.tsx, kept independent since this hook returns a plain string rather than rendering its own block. */
-function useAvailableIn(deadline: bigint): string {
+/**
+ * Ticks once a second toward `deadline` - same tick cadence as
+ * Countdown.tsx. Returns the live "now" (not just the formatted string)
+ * because the caller needs it too: challengeWindowOpen below has to
+ * compare the deadline against the CURRENT second, not just check that a
+ * deadline exists - data.countdown is fetched once per page load, so a
+ * deadline in the past is exactly as real a value as one in the future.
+ * Without exposing this tick, a visitor who leaves the tab open past the
+ * deadline would see the text count down to "Available now" while the
+ * button stayed disabled underneath it, fixed only by a reload.
+ */
+function useAvailableIn(deadline: bigint): { text: string; now: number } {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
@@ -284,7 +294,7 @@ function useAvailableIn(deadline: bigint): string {
     return () => clearInterval(interval);
   }, []);
 
-  return formatAvailableIn(Number(deadline) - now);
+  return { text: formatAvailableIn(Number(deadline) - now), now };
 }
 
 function ActionsSection({
@@ -311,8 +321,13 @@ function ActionsSection({
     data.countdown.status === "ok" && data.countdown.value.phase === "challenge"
       ? data.countdown.value.deadline
       : BigInt(0);
-  const challengeWindowOpen = challengeDeadline > BigInt(0);
-  const availableInText = useAvailableIn(challengeDeadline);
+  // data.countdown is fetched once per page load - comparing the
+  // deadline against the live "now" the ticking hook exposes (not just
+  // checking that a deadline exists) is what lets the button re-enable
+  // itself at the right second for a visitor who leaves the page open
+  // past the deadline, with no refetch and no reload.
+  const { text: availableInText, now } = useAvailableIn(challengeDeadline);
+  const challengeWindowOpen = Number(challengeDeadline) > now;
 
   if (data.proposal.status === "error") return null;
   const { record } = data.proposal.value;
