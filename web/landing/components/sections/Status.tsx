@@ -37,11 +37,15 @@ const LABEL: Record<ItemState, string> = {
 // this background, so no amount of redder/darker opacity reaches 4.5:1.
 // text-anchor-graphite is the lightest token that does pass (11.49:1);
 // the red hue itself has no WCAG-AA-safe form on this light background
-// in the current palette (flagged in the PR as a design-system gap, not
-// fixed here - no new colour, no token change).
+// in the current palette (flagged in the PR description as a
+// design-system follow-up, not fixed here - no new colour, no token
+// change). David picked bringing red back as a non-text marker instead:
+// a 1px risk-crimson border on the active tag. Non-text/UI elements only
+// need 3:1 (WCAG 1.4.11), and risk-crimson's own 3.08:1 against this
+// background clears that - same red, same token, just never as text.
 const TAG: Record<ItemState, string> = {
   done: "text-anchor-graphite",
-  active: "text-anchor-graphite",
+  active: "text-anchor-graphite border border-risk-crimson px-1.5 py-0.5",
   future: "text-anchor-graphite/70",
 };
 
