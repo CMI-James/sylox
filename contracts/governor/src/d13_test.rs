@@ -10,7 +10,7 @@
 //! on the host VM, with the same result: the new code runs `migrate()`.
 
 use soroban_sdk::{
-    contract, contractclient, contractimpl, symbol_short, Address, BytesN, Env,
+    contract, contractclient, contractimpl, symbol_short, Address, BytesN, ContractExecutable, Env,
 };
 
 #[contractclient(name = "TargetClient")]
@@ -34,23 +34,31 @@ macro_rules! target_version {
         #[contractimpl]
         impl $name {
             pub fn __constructor(env: Env, governor: Address) {
-                env.storage().instance().set(&symbol_short!("gov"), &governor);
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("gov"), &governor);
             }
             pub fn version(_env: Env) -> u32 {
                 $version
             }
             pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
                 governor(&env).require_auth();
-                env.deployer().update_current_contract_wasm(new_wasm_hash);
+                env.deployer()
+                    .update_current_contract(ContractExecutable::Wasm(new_wasm_hash));
             }
             /// Records and returns the version of the code that ran it.
             pub fn migrate(env: Env) -> u32 {
                 governor(&env).require_auth();
-                env.storage().instance().set(&symbol_short!("migr_by"), &$version);
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("migr_by"), &$version);
                 $version
             }
             pub fn migrated_by(env: Env) -> u32 {
-                env.storage().instance().get(&symbol_short!("migr_by")).unwrap_or(0)
+                env.storage()
+                    .instance()
+                    .get(&symbol_short!("migr_by"))
+                    .unwrap_or(0)
             }
         }
     };
@@ -84,7 +92,10 @@ fn upgrade_then_migrate_in_one_invocation_runs_the_new_code() {
 
     let ran = UpgradeThenMigrateClient::new(&env, &caller).run(&target_id, &v2_hash);
 
-    assert_eq!(ran, 2, "migrate() in the same invocation must run the new code");
+    assert_eq!(
+        ran, 2,
+        "migrate() in the same invocation must run the new code"
+    );
     assert_eq!(target.migrated_by(), 2);
     assert_eq!(target.version(), 2);
 }
