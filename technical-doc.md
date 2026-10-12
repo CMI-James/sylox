@@ -1129,7 +1129,7 @@ sequenceDiagram
   Staking-->>Oracle: EndpointStatus
   Oracle->>Oracle: write SignalSet.endpoint and ring slot
 
-  Note over Staking: only inside [epoch_close + probe_grace_secs, + settle_window_secs] (7.5), outside it, settle_probes rejects and the epoch never settles
+  Note over Staking: only inside [epoch_close + probe_grace_secs, + settle_window_secs] (7.5). Outside it, settle_probes rejects and the epoch never settles
   Oracle->>Staking: settle_probes(asset, epoch), once per asset epoch
   Staking->>Treasury: accrue_reward(reporter, ReporterRewards, share) for each reporter matching the aggregate, reporter_reward_per_epoch split equally (7.5, ADR-012)
   Staking->>Staking: reporters disagreeing with a fault_majority_threshold+ majority accrue one fault

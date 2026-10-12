@@ -136,11 +136,11 @@ Events come in three tiers, depending on how objective the evidence is:
 
 | Tier | Kinds | Who can propose | Evidence |
 | --- | --- | --- | --- |
-| **Tier 1**: data verified | Depeg, IssuerFreeze, MintWithoutBacking | Anyone, no bond needed | The oracle's finalized, recomputable signal history |
+| **Tier 1**: data verified | Depeg, IssuerFreeze, MintWithoutBacking (not built yet) | Anyone, no bond needed | The oracle's finalized, recomputable signal history |
 | **Tier 2**: reporter claim | WithdrawalHalt | Anyone, with a bond | Reporter probes, stuck SEP-24 transactions, anchor cooperation |
 | **Tier 3**: committee | Insolvency | The committee | Published written reasoning |
 
-Every event follows the same lifecycle: **Proposed → (Challenged → Escalated) → Declared or Rejected**. Anyone can challenge a proposal within its challenge window by posting a bond, which escalates it to a 4 of 7 committee. The committee must rule before a fixed deadline; if it does not, a predetermined default outcome applies, so no event can be stalled forever. A Depeg can also **cure** if the price recovers during the challenge window.
+Every event follows the same lifecycle: **Proposed → (Challenged → Escalated) → Declared or Rejected**. Anyone can challenge a proposal within its challenge window by posting a bond, which escalates it to a 4 of 7 committee. The committee must rule before a fixed deadline; if it does not, a predetermined default outcome applies, so no event can be stalled forever. A Depeg can also **cure** if the price stays above the cure threshold (0.98 by default) for the whole challenge window.
 
 While any event is in progress, the asset's band is forced to at least Distress and new cover sales stop.
 
@@ -274,7 +274,7 @@ Requires Rust with the `wasm32v1-none` target and the [Stellar CLI](https://deve
 ```sh
 cargo check --workspace
 cargo test --workspace
-cargo build --target wasm32v1-none --release
+stellar contract build
 ```
 
 ### Web app, landing site, docs and SDK
@@ -283,6 +283,7 @@ Everything JS/TS is an npm workspace. Install and run from the repo root:
 
 ```sh
 npm install
+npm run build -w packages/sdk   # the app and docs use the SDK's built output
 npm run dev -w web/app        # the Sylox app
 npm run dev -w web/landing    # the marketing site
 npm run dev -w web/docs       # the docs site
@@ -292,7 +293,7 @@ See [`web/README.md`](./web/README.md) and [`web/app/README.md`](./web/app/READM
 
 ## Testnet deployment
 
-A live deployment of the four contracts that were first to merge (`RiskOracle`, `Staking`, `Treasury`, `EventRegistry`) runs on Stellar testnet, wired to each other, with one real asset registered and scored. Two testnet-only stand-ins are used, and both are replaced as the real contracts land:
+A live deployment of the four contracts that were first to merge (`RiskOracle`, `Staking`, `Treasury`, `EventRegistry`) runs on Stellar testnet, wired to each other, with one real asset registered; its score appears once 7 days of history exist. Two testnet-only stand-ins are used, and both are replaced as the real contracts land:
 
 - **The admin key stands in for Governor.** A dedicated, funded testnet identity (`sylox-testnet-admin`) is passed wherever a contract expects a `governor` address. It holds no real value.
 - **TUSD is test-only collateral, not real money.** An active keeper needs a bond the Circle testnet USDC faucet can't supply at the needed scale, so testnet uses a self-issued asset, "TUSD". It is never called USDC anywhere in this deployment; the asset Sylox actually tracks and scores is separate, real Circle testnet USDC.
@@ -302,7 +303,9 @@ Requires the `stellar` CLI version pinned in `.github/workflows/ci.yml` (`STELLA
 
 ```sh
 # 1. Deploy all four contracts, issue TUSD, register the tracked asset,
-#    write deployments/testnet.json. Safe to re-run.
+#    write deployments/testnet.json. Every run deploys fresh contract instances
+#    and rewrites deployments/testnet.json, so on the shared testnet
+#    deployment only run it as part of a planned redeploy.
 deploy/deploy.sh testnet
 
 # 2. Post synthetic demo signals for the last 24 closed epochs (or pass a
@@ -330,7 +333,6 @@ Known gaps specific to this deployment: `initialize` is unauthenticated and can 
 | [`docs/design/`](./docs/design/) | Design notes for the event registry and markets |
 | [`deploy/README.md`](./deploy/README.md) | Testnet deploy order and operational notes |
 | [docs.sylox.xyz](https://docs.sylox.xyz/docs) | Concepts, protection markets, integration guides, SDK and contract reference |
-| [`AI_DISCLOSURE.md`](./AI_DISCLOSURE.md) | How AI tools are used in this project |
 
 **Where to start in `technical-doc.md`:**
 
