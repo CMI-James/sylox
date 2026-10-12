@@ -125,8 +125,13 @@ return_value_from() { echo "$1" | tail -1; }
 confirm_tx() {
   local hash="$1" attempt status_json status
   for attempt in 1 2 3 4 5 6 7 8; do
+    # `|| true`: under `set -e`, `var="$(cmd)"` is a plain command whose
+    # own exit status is cmd's exit status - a transient curl failure
+    # here would kill the whole script before this loop's own retry
+    # (the `*) sleep 2` branch below) ever runs. Same footgun as every
+    # other `out="$(... 2>&1)"` capture in this script.
     status_json="$(curl -sS "$RPC_URL" -X POST -H 'Content-Type: application/json' \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":{\"hash\":\"$hash\"}}" 2>&1)"
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":{\"hash\":\"$hash\"}}" 2>&1)" || true
     status="$(echo "$status_json" | jq -r '.result.status // "UNKNOWN"' 2>/dev/null)"
     case "$status" in
       SUCCESS) return 0 ;;
@@ -156,7 +161,10 @@ invoke_confirmed() {
   local contract="$1" source="$2"; shift 2
   local out hash attempt
   for attempt in 1 2 3; do
-    out="$("$STELLAR_BIN" contract invoke --send=yes --id "$contract" --source-account "$source" --network testnet -- "$@" 2>&1)"
+    # `|| true`: see confirm_tx's own comment above - without it, `set -e`
+    # kills the script on any CLI/contract error here before the transient-
+    # vs-real classification below ever runs.
+    out="$("$STELLAR_BIN" contract invoke --send=yes --id "$contract" --source-account "$source" --network testnet -- "$@" 2>&1)" || true
     if echo "$out" | grep -qi "Request timeout\|transaction submission timeout\|error reading a body from connection\|client error (SendRequest)\|client error (Connect)\|txBadSeq"; then
       log "invoke $1 (attempt $attempt/3): transient RPC error, retrying"
       sleep 3
@@ -380,8 +388,12 @@ post_signals_with_retry() {
   local signal_set="$1" label="$2"
   local out hash attempt
   for attempt in 1 2 3 4; do
+    # `|| true`: see confirm_tx's own comment above - the #103/#115/
+    # cascade classification right below is exactly the case `set -e`
+    # would otherwise short-circuit past, silently, with no die and no
+    # output at all.
     out="$("$STELLAR_BIN" contract invoke --send=yes --id "$RO_ID" --source-account "$DEMO_KEEPER" --network testnet \
-      -- post_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --s "$signal_set" 2>&1)"
+      -- post_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --s "$signal_set" 2>&1)" || true
     if echo "$out" | grep -qi "Error(Contract, #103)\|Error(Contract, #115)\|EpochAlreadyPosted\|HourAlreadyPosted"; then
       echo "$out"; return 0
     fi
@@ -475,8 +487,9 @@ post_fresh_sub_epoch() {
   local signal_set="{\"epoch\":$hour,\"posted_at\":0,\"peg_ratio\":\"10000000\",\"peg_ratio_p10\":\"10000000\",\"liquidity_2pct\":\"500000000000\",\"redemption_net\":\"0\",\"supply\":\"2000000000\",\"supply_change_bps\":0,\"issuer_actions\":{\"clawbacks\":0,\"clawback_amount\":\"0\",\"auth_revocations\":0,\"flag_changes\":0},\"endpoint\":\"Unknown\",\"inputs_hash\":\"$inputs_hash\",\"poster\":\"$DEMO_KEEPER_ADDR\"}"
   local out hash attempt
   for attempt in 1 2 3; do
+    # `|| true`: see confirm_tx's own comment above.
     out="$("$STELLAR_BIN" contract invoke --send=yes --id "$RO_ID" --source-account "$DEMO_KEEPER" --network testnet \
-      -- post_sub_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --hour "$hour" --sub "$sub" --s "$signal_set" 2>&1)"
+      -- post_sub_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --hour "$hour" --sub "$sub" --s "$signal_set" 2>&1)" || true
     if echo "$out" | grep -qi "Error(Contract, #103)\|EpochAlreadyPosted"; then
       return 0
     fi

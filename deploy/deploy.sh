@@ -188,8 +188,14 @@ if [[ "$NETWORK" == "testnet-demo" ]]; then
   confirm_tx() {
     local hash="$1" attempt status_json status
     for attempt in 1 2 3 4 5 6 7 8; do
+      # `|| true`: under `set -e`, `var="$(cmd)"` is a plain command whose
+      # own exit status is cmd's exit status - a transient curl failure
+      # here would kill the whole script before this loop's own retry
+      # (the `*) sleep 2` branch below) ever runs. Same footgun as every
+      # other `out="$(... 2>&1)"` capture in this script; see invoke_demo
+      # for the write-path version of the same fix.
       status_json="$(curl -sS "$RPC_URL" -X POST -H 'Content-Type: application/json' \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":{\"hash\":\"$hash\"}}" 2>&1)"
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":{\"hash\":\"$hash\"}}" 2>&1)" || true
       status="$(echo "$status_json" | jq -r '.result.status // "UNKNOWN"' 2>/dev/null)"
       case "$status" in
         SUCCESS) return 0 ;;
@@ -312,8 +318,11 @@ $deploy_out"
   mint_dmusd() {
     local to_addr="$1" amount="$2"
     local out hash
+    # `|| true`: see confirm_tx's own comment above - without it, `set -e`
+    # kills the script on any CLI/contract error here before the die
+    # below (with the actual error text) ever gets to run.
     out="$("$STELLAR_BIN" contract invoke --send=yes --id "$DMUSD_ID" --source-account "$DEMO_ISSUER" \
-      --network testnet -- mint --to "$to_addr" --amount "$amount" 2>&1)"
+      --network testnet -- mint --to "$to_addr" --amount "$amount" 2>&1)" || true
     echo "$out" | grep -qi "error" && die "mint to $to_addr failed:
 $out"
     hash="$(echo "$out" | grep -oE '[a-f0-9]{64}' | head -1)"
@@ -326,7 +335,7 @@ $out"
   log "minted $DEMO_KEEPER_BOND DMUSD to the demo keeper"
 
   log "[5/8] Precomputing contract addresses (constructor flow, deploy.sh testnet's own technique)"
-  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v11"
+  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v12"
   salt_for_demo() {
     local contract="$1"
     echo -n "${CONSTRUCTOR_NONCE_DEMO}-${contract}" | shasum -a 256 | cut -d' ' -f1
@@ -395,7 +404,8 @@ $out"
   invoke_demo() {
     local contract="$1" source="$2"; shift 2
     local out hash
-    out="$("$STELLAR_BIN" contract invoke --send=yes --id "$contract" --source-account "$source" --network testnet -- "$@" 2>&1)"
+    # `|| true`: see confirm_tx's own comment above.
+    out="$("$STELLAR_BIN" contract invoke --send=yes --id "$contract" --source-account "$source" --network testnet -- "$@" 2>&1)" || true
     echo "$out" | grep -qi "error" && die "invoke $1 on $contract failed:
 $out"
     hash="$(echo "$out" | grep -oE '[a-f0-9]{64}' | head -1)"
@@ -500,8 +510,13 @@ $out"
     # the real EPOCH_SECS (3,600s), where backfill posts once per
     # epoch, never racing far enough ahead to build a backlog at all.
     for attempt in 1 2 3 4; do
+      # `|| true`: see confirm_tx's own comment above - the #103/#115/
+      # cascade classification right below is exactly the case `set -e`
+      # would otherwise short-circuit past, silently, with no die and no
+      # output at all (confirmed: this is what actually happened the
+      # first time this loop hit a real finality backlog cascade).
       post_out="$("$STELLAR_BIN" contract invoke --send=yes --id "$RO_ID" --source-account "$DEMO_KEEPER" --network testnet \
-        -- post_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --s "$signal_set" 2>&1)"
+        -- post_signals --keeper "$DEMO_KEEPER_ADDR" --asset "$DMFRZ_ID" --s "$signal_set" 2>&1)" || true
       if echo "$post_out" | grep -qi "Error(Contract, #103)\|Error(Contract, #115)\|EpochAlreadyPosted\|HourAlreadyPosted"; then
         # #103 (EpochAlreadyPosted) and #115 (HourAlreadyPosted, this
         # hour already posted via the sub-epoch path instead) both
