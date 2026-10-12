@@ -258,6 +258,35 @@ function CureProgressSection({ data }: { data: EventPageData }) {
   );
 }
 
+// Compact form for the note next to a disabled Finalize ("Available in
+// 35m"), distinct from Countdown.tsx's own formatRemaining: that one
+// spells out every unit down to the second for its own two-line display
+// block, which would crowd a one-line note next to a button. Rounds to
+// the single coarsest unit instead - the exact second a 2-hour challenge
+// window closes isn't actionable information next to a button whose
+// whole point is "come back later."
+function formatAvailableIn(seconds: number): string {
+  if (seconds <= 0) return "Available now";
+  const days = Math.floor(seconds / 86400);
+  if (days > 0) return `Available in ${days}d`;
+  const hours = Math.floor(seconds / 3600);
+  if (hours > 0) return `Available in ${hours}h`;
+  const minutes = Math.max(1, Math.floor(seconds / 60));
+  return `Available in ${minutes}m`;
+}
+
+/** Ticks once a second toward `deadline` - same tick cadence as Countdown.tsx, kept independent since this hook returns a plain string rather than rendering its own block. */
+function useAvailableIn(deadline: bigint): string {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return formatAvailableIn(Number(deadline) - now);
+}
+
 function ActionsSection({
   eventId,
   data,
@@ -267,6 +296,24 @@ function ActionsSection({
   data: EventPageData;
   onActionSuccess: () => void;
 }) {
+  // finalize() throws ChallengeWindowOpen while the event is Proposed
+  // and its own challenge window hasn't closed yet (see
+  // contracts/event-registry/src/lib.rs's finalize() and
+  // web/docs/content/docs/concepts.mdx's Proposed->Declared row) - the
+  // same "challenge" phase CountdownSection above already reads from
+  // data.countdown. useAvailableIn is called unconditionally (React's
+  // rules of hooks - this component returns early below when the
+  // proposal failed to load) with a BigInt(0) fallback deadline when
+  // the window isn't actually open; formatAvailableIn(0) is never
+  // rendered in that case, since the text below only shows while
+  // challengeWindowOpen is true.
+  const challengeDeadline =
+    data.countdown.status === "ok" && data.countdown.value.phase === "challenge"
+      ? data.countdown.value.deadline
+      : BigInt(0);
+  const challengeWindowOpen = challengeDeadline > BigInt(0);
+  const availableInText = useAvailableIn(challengeDeadline);
+
   if (data.proposal.status === "error") return null;
   const { record } = data.proposal.value;
 
@@ -281,7 +328,22 @@ function ActionsSection({
   // (unlike kind above) is still shown disabled with an explanation,
   // since it's a real state the event legitimately passes through.
   const checkpointDisabled = record.state.tag !== "Proposed";
-  const finalizeDisabled = record.state.tag !== "Proposed";
+
+  // Disabling Finalize for exactly the challenge-window case, rather
+  // than only gating on record.state.tag !== "Proposed" like Checkpoint
+  // does, is what actually stops someone clicking Finalize and getting
+  // a simulate-time error for a condition the page already knows about.
+  // A countdown fetch error fails open (challengeWindowOpen stays
+  // false) rather than permanently hiding a legitimate action behind an
+  // unrelated read failure - the simulate step still catches a
+  // genuinely-too-early click either way.
+  const finalizeDisabled = record.state.tag !== "Proposed" || challengeWindowOpen;
+  const finalizeDisabledReason =
+    record.state.tag !== "Proposed"
+      ? "Only applies to an event that's still Proposed."
+      : challengeWindowOpen
+        ? `Challenge window open. ${availableInText}.`
+        : undefined;
 
   const eventIdBigInt = () => {
     try {
@@ -308,7 +370,7 @@ function ActionsSection({
         <WriteActionButton
           label="Finalize"
           disabled={finalizeDisabled}
-          disabledReason={finalizeDisabled ? "Only applies to an event that's still Proposed." : undefined}
+          disabledReason={finalizeDisabledReason}
           prepare={(signer) => prepareFinalize(Networks.Testnet, eventIdBigInt(), signer)}
           confirm={(prepared, signer) => confirmFinalize(prepared, signer)}
           onSuccess={onActionSuccess}

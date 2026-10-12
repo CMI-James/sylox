@@ -25,6 +25,7 @@ function buildEventData(overrides: {
   asset?: string;
   proposedAt?: bigint;
   declaredAt?: bigint | undefined;
+  countdown?: EventPageData["countdown"];
 }): EventPageData {
   const proposedAt = overrides.proposedAt ?? BigInt(1_790_000_000);
   return {
@@ -50,7 +51,7 @@ function buildEventData(overrides: {
         definitionSentence: "Depeg: below 0.95 of peg for 72 hours, up to 6 missing hours allowed.",
       },
     },
-    countdown: { status: "ok", value: { phase: "closed" } },
+    countdown: overrides.countdown ?? { status: "ok", value: { phase: "closed" } },
     cureProgress: { status: "ok", value: null },
   };
 }
@@ -173,6 +174,64 @@ describe("EventPageClient", () => {
     const checkpointButton = screen.getByRole("button", { name: "Checkpoint" });
     expect(checkpointButton).toBeDisabled();
     expect(screen.getByText(/only applies while the event's still proposed/i)).toBeInTheDocument();
+  });
+
+  it("disables Finalize with an 'Available in' note while the challenge window is open", async () => {
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 35 * 60); // 35 minutes out
+    fetchEventPageData.mockResolvedValue(
+      buildEventData({ state: "Proposed", countdown: { status: "ok", value: { phase: "challenge", deadline } } }),
+    );
+    renderEventPage("42");
+
+    await screen.findByRole("heading", { level: 1 });
+    const finalizeButton = screen.getByRole("button", { name: "Finalize" });
+    expect(finalizeButton).toBeDisabled();
+    expect(screen.getByText(/challenge window open\. available in 35m\./i)).toBeInTheDocument();
+    // Never the "not Proposed" message - the event IS Proposed here, the
+    // challenge window is the only reason it's disabled.
+    expect(screen.queryByText(/only applies to an event that's still proposed/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps Finalize enabled once the challenge window has actually closed, even while still Proposed", async () => {
+    // A real "effectively Final" window: Proposed, but finalize()'s own
+    // deadline check would already pass - the countdown API models this
+    // as phase: "closed" once a Proposed event's window has elapsed
+    // (fetchCountdown in lib/event-data.ts only returns "challenge" for
+    // a still-open window), not as a lingering past deadline.
+    fetchEventPageData.mockResolvedValue(
+      buildEventData({ state: "Proposed", countdown: { status: "ok", value: { phase: "closed" } } }),
+    );
+    renderEventPage("42");
+
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.getByText(/connect wallet to finalize/i)).toBeInTheDocument();
+    expect(screen.queryByText(/challenge window open/i)).not.toBeInTheDocument();
+  });
+
+  it("disables Finalize for a non-Proposed event even when countdown is in the challenge phase (stale data isn't trusted over state)", async () => {
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+    fetchEventPageData.mockResolvedValue(
+      buildEventData({ state: "Declared", countdown: { status: "ok", value: { phase: "challenge", deadline } } }),
+    );
+    renderEventPage("42");
+
+    await screen.findByRole("heading", { level: 1 });
+    const finalizeButton = screen.getByRole("button", { name: "Finalize" });
+    expect(finalizeButton).toBeDisabled();
+    // Still disabled, but for the real reason (not Proposed) - the
+    // challenge-window message only applies while the event actually is
+    // Proposed, matching finalizeDisabledReason's own precedence.
+    expect(screen.getByText(/only applies to an event that's still proposed/i)).toBeInTheDocument();
+  });
+
+  it("leaves Finalize enabled (fails open) when the countdown section errors, rather than hiding a legitimate action behind an unrelated read failure", async () => {
+    fetchEventPageData.mockResolvedValue(
+      buildEventData({ state: "Proposed", countdown: { status: "error", message: "RPC unreachable" } }),
+    );
+    renderEventPage("42");
+
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.getByText(/connect wallet to finalize/i)).toBeInTheDocument();
   });
 
   it("shows 'Proposed at <proposed_at>' when declared_at is 0 (the real bug case), not an epoch date", async () => {
