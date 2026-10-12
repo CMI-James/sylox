@@ -119,28 +119,27 @@ stalled score even while new data keeps posting.
 A credit event is what actually unlocks a payout from cover. Scores and
 bands are advisory. Only a declared event pays out.
 
-```mermaid
-stateDiagram-v2
-  [*] --> None
-  None --> Proposed: anyone proposes
-  Proposed --> Declared: no challenge before the window closes
-  Proposed --> Cured: price recovers during the challenge window
-  Proposed --> Challenged: challenged
-  Challenged --> Escalated: automatic, same call
-  Escalated --> Declared: committee declares, or a ruling deadline passes
-  Escalated --> Rejected: committee rejects, or a ruling deadline passes
-  Cured --> None: after a cooldown
-  Rejected --> None: after a cooldown
-  Declared --> [*]
-```
+| From | To | What causes it |
+| --- | --- | --- |
+| None | Proposed | Anyone proposes, once the on-chain data meets a registered definition. |
+| Proposed | Declared | The challenge window closes with no challenge, **and then anyone calls `finalize`**. The state never moves on its own: `finalize` is a separate, permissionless call that only succeeds once the window has passed. |
+| Proposed | Cured | Price recovers during the challenge window, discovered the same way: someone calls `finalize` after the window closes, and the contract finds the price already recovered. |
+| Proposed | Challenged | Anyone disputes the proposal by posting a bond, inside the challenge window. |
+| Challenged | Escalated | Automatic, in the same call as the challenge. |
+| Escalated | Declared | The committee calls `rule` to declare, or (after the ruling deadline passes with no ruling) anyone calls `resolve_timeout` and the proposal was on-chain-backed. |
+| Escalated | Rejected | The committee calls `rule` to reject, or (after the ruling deadline passes with no ruling) anyone calls `resolve_timeout` and the proposal was claim-based. |
+| Cured | None | After a cooldown. |
+| Rejected | None | After a cooldown. |
 
 - **Proposed**: anyone can propose an event once the on-chain data
   meets a registered definition (for example: peg below a threshold for
   most of a trailing window, with only a small number of hours allowed
   to be missing).
 - **Challenge window**: a fixed window during which anyone can dispute
-  the proposal by posting a bond. No challenge before the window closes
-  means the event becomes Declared.
+  the proposal by posting a bond. A Proposed event never becomes
+  Declared by itself: once the window closes with no challenge, anyone
+  can call `finalize`, and that call is what actually moves the event
+  to Declared.
 - **Challenged, then Escalated**: a challenge immediately escalates to
   the committee in the same call, so an event never sits open
   indefinitely waiting for someone to take the next step.
@@ -182,8 +181,10 @@ Any one of these blocks a purchase on its own. The gate only ever
 blocks *new* cover: it never touches cover someone already holds, and
 it never cancels a position.
 
-This is also what gives cover its basic guarantee: because a Depeg
-event needs every present hour in its own trailing window to have
-failed, and a buyer could only have bought while that same window was
-still clean, any depeg that eventually triggers a payout necessarily
-started after the purchase, not before it.
+This is also why cover can't be bought against a depeg that has
+already started: a Depeg event needs every present hour in its own
+trailing window to have failed, and the gate blocks a purchase the
+moment any hour in that window has already failed, so a buyer could
+only have bought while the window was still clean. Any depeg that
+eventually triggers a payout necessarily started after the purchase,
+not before it.

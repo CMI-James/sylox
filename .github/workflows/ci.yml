@@ -301,12 +301,17 @@ jobs:
       # never flags something like "insurance" inside an unrelated
       # word or "APYRIGHT"-style false positive (there isn't one here,
       # but the same guard pattern as this repo's own
-      # no-em-dash-guard.sh is worth keeping deliberate).
+      # no-em-dash-guard.sh is worth keeping deliberate). Widened past
+      # #78's review to catch the stems too (insured/insure,
+      # guarantee/guarantees), not just the one inflected form each -
+      # the review's own first pass slipped through with "guarantee"
+      # (no -d), which the original guaranteed-only check would have
+      # missed entirely.
       - name: Check for banned words in web/docs content
         working-directory: web/docs
         run: |
-          if grep -rinE '\b(insurance|guaranteed|APY)\b' content/; then
-            echo "::error::Found a banned word (insurance/guaranteed/APY) in web/docs/content. Sylox is protection, not insurance, and never promises a guaranteed return - see content/docs/index.mdx's Testnet only section for the house phrasing."
+          if grep -rinE '\b(insurance|insured?|guarantee[ds]?|APY)\b' content/; then
+            echo "::error::Found a banned word (insurance/insured/insure/guarantee/guaranteed/APY) in web/docs/content. Sylox is protection, not insurance, and never promises a guaranteed return - see content/docs/index.mdx's Testnet only section for the house phrasing."
             exit 1
           fi
 
