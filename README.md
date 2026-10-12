@@ -324,7 +324,7 @@ deploy/smoke-testnet.sh
 
 Current contract ids, Wasm hashes and identity public keys are in [`deployments/testnet.json`](./deployments/testnet.json), rewritten on every `deploy.sh testnet` run. No secret key ever appears in this repository; every identity's secret lives only in the local `stellar keys` store.
 
-Known gaps specific to this deployment: `initialize` is unauthenticated and can be front-run on all four contracts ([#21](https://github.com/Sylox-labs/sylox/issues/21)); committee-gated functions (`rule`, `resolve_timeout`, signal dispute resolution) don't work until Governor exists ([#22](https://github.com/Sylox-labs/sylox/issues/22)); EventRegistry's `factory` argument is a placeholder until MarketFactory is deployed ([#23](https://github.com/Sylox-labs/sylox/issues/23)).
+Known gaps specific to this deployment: committee-gated functions (`rule`, `resolve_timeout`, signal dispute resolution) don't work until Governor exists ([#22](https://github.com/Sylox-labs/sylox/issues/22)); EventRegistry's `factory` argument is a placeholder until MarketFactory is deployed ([#23](https://github.com/Sylox-labs/sylox/issues/23)).
 
 ## Documentation map
 
