@@ -29,6 +29,10 @@ export const nav = {
     label: "GitHub",
     href: "https://github.com/Sylox-labs",
   },
+  docs: {
+    label: "Docs",
+    href: "https://docs.sylox.xyz/docs",
+  },
   launchApp: {
     label: "Launch app",
     tag: "Testnet",
@@ -222,9 +226,10 @@ export const faq = {
   // word-for-word and reordered to match the brief, plus one new entry
   // ("Can I use the risk feed...") that already existed under slightly
   // different wording and is now replaced with the brief's exact copy.
-  // The last entry's link ("Start with the integration guides ->
-  // /docs/integration-guides") has no slot in Faq.tsx (answers render as
-  // plain text) - flagged in the PR, not added.
+  // The last entry's two links ("Sylox SDK" -> /docs/sdk-reference,
+  // "the integration guides" -> /docs/integration-guides) are wired up
+  // via `answerLinks`: Faq.tsx splits `answer` on each entry's `text` and
+  // renders that substring as a link, keeping the sentence word-for-word.
   items: [
     {
       question: "How is cover different from a policy?",
@@ -249,6 +254,10 @@ export const faq = {
       question: "Can I use the risk feed in my wallet or protocol?",
       answer:
         "Yes. The feed is public. Read it straight from the contract, or use the Sylox SDK. Start with the integration guides.",
+      answerLinks: [
+        { text: "Sylox SDK", href: "https://docs.sylox.xyz/docs/sdk-reference" },
+        { text: "the integration guides", href: "https://docs.sylox.xyz/docs/integration-guides" },
+      ],
     },
   ],
   _source: "landing/copy-and-docs-links brief, FAQ section",

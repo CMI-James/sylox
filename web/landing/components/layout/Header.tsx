@@ -186,6 +186,16 @@ export function Header() {
               );
             })}
             <a
+              href={nav.docs.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group relative inline-flex items-center gap-1 font-mono text-xs uppercase tracking-[0.1em] text-cyber-tin transition-colors hover:text-silo-oatmeal"
+            >
+              {nav.docs.label}
+              <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+              <span className="absolute -bottom-1 left-0 h-px w-0 bg-silo-oatmeal transition-all duration-200 group-hover:w-full" />
+            </a>
+            <a
               href={nav.github.href}
               target="_blank"
               rel="noopener noreferrer"
@@ -294,6 +304,18 @@ export function Header() {
             {link.label}
           </a>
         ))}
+        <a
+          href={nav.docs.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-menu-item
+          tabIndex={isMenuOpen ? 0 : -1}
+          className="inline-flex items-center gap-2 font-display text-3xl text-silo-oatmeal"
+          onClick={() => setIsMenuOpen(false)}
+        >
+          {nav.docs.label}
+          <ArrowUpRight className="h-5 w-5" aria-hidden="true" />
+        </a>
         <a
           href={nav.github.href}
           target="_blank"
