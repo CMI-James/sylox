@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Stopgap for issue #28: none of RiskOracle, EventRegistry, Treasury or
-# Staking ever call extend_ttl on their own current-state storage, so
-# every persistent/instance entry they write quietly ages toward
-# expiry with nothing refreshing it. The real fix (extend TTL on
-# write, per #28's policy) ships through upgrade() (#12), not a
-# redeploy; this script buys time until that lands by extending from
-# outside, as a scheduled read-then-extend pass. Remove this script
-# and its call site in deploy/post-demo-signals.sh once upgrade()
-# ships the real fix.
+# Stopgap for issue #28: the RiskOracle, EventRegistry, Treasury and
+# Staking contracts LIVE on testnet never call extend_ttl on their own
+# current-state storage, so every persistent/instance entry they write
+# quietly ages toward expiry with nothing refreshing it. The real fix
+# is now in this repository's contract code (fix/ttl-policy): every
+# state-changing call extends the instance, and every persistent write
+# extends that entry, with sylox_types::ttl's shared constants. The
+# live contracts only get it once each is upgraded to that code
+# through upgrade() (#12), not a redeploy. Until every live contract
+# runs it, this script keeps buying time by extending from outside, as
+# a scheduled read-then-extend pass. Keep this script and its call
+# site in deploy/post-demo-signals.sh until then; remove both once
+# every live contract has been upgraded to code with the fix.
 #
 # Run by deploy/post-demo-signals.sh testnet --live, once per --live
 # pass (every 5 minutes), AFTER posting. One getLedgerEntries call

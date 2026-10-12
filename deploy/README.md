@@ -287,17 +287,23 @@ time.
 
 ## `deploy/extend-ttl.sh`: a TTL stopgap for issue #28
 
-**This is a stopgap, not the real fix.** None of RiskOracle,
-EventRegistry, Treasury or Staking ever call `extend_ttl` on their own
-current-state storage, so every persistent/instance entry they write
-quietly ages toward expiry with nothing refreshing it. Measuring every
-tracked entry's `liveUntilLedgerSeq` (issue #28) showed the earliest
-expiring about 6 days out, too soon to wait for the real fix (extend
-TTL on write, per #28's own policy) to ship through `upgrade()`
-(#12). **Remove this script and its call site in
-`deploy/post-demo-signals.sh` once `upgrade()` ships that fix** - this
-script's whole job disappears the moment the contracts extend their
-own TTL on write.
+**This is a stopgap, not the real fix.** The RiskOracle,
+EventRegistry, Treasury and Staking contracts live on testnet never
+call `extend_ttl` on their own current-state storage, so every
+persistent/instance entry they write quietly ages toward expiry with
+nothing refreshing it. Measuring every tracked entry's
+`liveUntilLedgerSeq` (issue #28) showed the earliest expiring about 6
+days out.
+
+**The real fix is now in the contract code, but not yet on testnet.**
+As of `fix/ttl-policy`, every state-changing call extends the
+contract's instance TTL and every persistent write extends that entry,
+with the shared `sylox_types::ttl` constants. The live contracts only
+get this once each one is upgraded to that code through `upgrade()`
+(#12). **The cron stays until then: keep this script and its call site
+in `deploy/post-demo-signals.sh` until every live contract runs code
+with the fix, and remove both only after that upgrade.** Its job
+disappears once the live contracts extend their own TTL on write.
 
 `deploy/extend-ttl.sh testnet` runs at the end of every
 `post-demo-signals.sh testnet --live` pass (every 5 minutes), after
