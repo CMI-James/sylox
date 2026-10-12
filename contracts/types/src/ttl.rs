@@ -55,3 +55,17 @@ where
         storage.extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
     }
 }
+
+/// Writes `val` under persistent `key` and extends that entry with the
+/// shared constants above, so no write can leave an entry to drift
+/// toward archival (issue #28). The entry exists right after the write,
+/// so this needs no `has` check, unlike `extend_persistent`.
+pub fn set_persistent<K, V>(env: &Env, key: &K, val: &V)
+where
+    K: IntoVal<Env, Val>,
+    V: IntoVal<Env, Val>,
+{
+    let storage = env.storage().persistent();
+    storage.set(key, val);
+    storage.extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+}
