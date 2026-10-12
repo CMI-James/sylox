@@ -3,11 +3,187 @@ title: Concepts
 description: How risk scoring, events, and cover gating fit together.
 ---
 
-## Coming soon
+## Testnet only
 
-This page will cover the core concepts behind Sylox: risk bands and
-scoring, how signals become a confirmed epoch, event proposals and
-challenges, and how the cover gate uses recent signal history to block
-new cover during a live risk period.
+Everything on this page describes the real contract behavior, but the
+numbers you will see if you open the app are testnet values. Data shown
+by the app and referenced in these docs is sample data until the live
+data service ships.
 
-Testnet only. Sample data until the live data service ships.
+## Epochs and sub-epochs
+
+Sylox scores risk in fixed one hour windows called epochs. Epoch `n`
+covers a one hour span measured from the Unix epoch, the same for every
+asset, with nothing to initialize per asset.
+
+Underneath each hour, a faster layer called a sub-epoch posts more
+often: 5 minutes by default, configurable per asset up to the full
+hour. A keeper posts a sub-epoch's signals as soon as its short window
+closes, and the contract rolls several sub-epochs up into the hour once
+every one of them is decided. This is why the app shows two numbers
+side by side:
+
+- **Live**: the newest posted sub-epoch, still inside its own challenge
+  window. This can move every few minutes.
+- **Confirmed**: the newest hour that has actually settled. This is
+  the value any contract check (a cover purchase, a proposed event)
+  actually reads.
+
+Live data is for watching an asset in real time. Confirmed data is what
+counts for anything payout adjacent. The app never uses a Live value to
+decide whether a cover gate check or an event proposal passes.
+
+## Pending, Final, and "effectively Final"
+
+Every epoch an asset posts moves through a small set of states:
+
+- **Pending**: just posted, inside its challenge window (2 hours by
+  default). The contract already shows this value, but it can still be
+  disputed.
+- **Disputed**: someone challenged the posting. It stays this way
+  until the committee rules, or a ruling deadline passes unruled.
+- **Final**: settled. Nothing changes a Final epoch except a resolved
+  dispute overturning it.
+
+There's a subtlety worth naming directly, because the app's own code
+leans on it: a slot can be **effectively Final** before its stored
+state actually says `Final`. Once a Pending epoch's own challenge
+window has elapsed with no dispute, it behaves as Final for every
+purpose that matters, even though nothing had to write to storage to
+make that true. The contract (and the SDK's `ring()`/`effective_window`
+reads) compute this on the fly: a Pending slot whose deadline has
+already passed reads back as Final without needing a transaction to
+flip it. The app's own display logic walks the ring looking for the
+newest slot whose *effective* state is Final, specifically because
+that is the value any real check (the risk score, a Tier 1 event
+proposal) is actually computed from, not the newest Pending or raw
+stored value.
+
+An hour built from sub-epochs behaves the same way from the outside: it
+either hasn't built yet (shown as Pending or Disputed, carrying a live
+roll-up of whatever sub-epochs have posted so far) or it's built,
+which writes it straight to Final. A built hour never goes through its
+own separate Pending period, because every sub-epoch underneath it
+already did.
+
+## Risk score and bands
+
+Every tracked asset has a risk score from 0 to 100, recomputed from the
+newest Final hour's signals: peg deviation, endpoint health, redemption
+pressure, issuer actions, liquidity, and supply shocks, combined with
+governance-set weights.
+
+The score maps to a band:
+
+| Band | Meaning |
+| --- | --- |
+| Normal | No material risk signal |
+| Watch | An early signal, not yet a pattern |
+| Warning | A sustained signal worth attention |
+| Distress | A serious signal, or an event is actively being proposed, challenged, or escalated for this asset |
+| Event | A credit event has been declared final for this asset |
+
+Bands resist flapping: moving up (toward Distress) applies immediately,
+but moving back down needs several consecutive hours in the lower
+range first. This means a band can look "stuck" above where the
+current hour's own numbers would place it. That's deliberate: one good
+hour right after a bad stretch doesn't erase the stretch.
+
+While an event is open (Proposed, Challenged, or Escalated, see below),
+the band is held at Distress or worse regardless of what the
+underlying score would otherwise say. This is a floor applied on every
+read, not a rewrite of the stored score; once the event closes, the
+floor lifts and the band reflects the stored score again.
+
+## Stale data
+
+An asset is stale when its stored score hasn't been computed from a
+Final hour recently enough, or when it's too new to have the history a
+trustworthy score needs at all. Staleness never triggers a credit
+event by itself, but it does block new cover from being bought and
+blocks new cover markets from opening on that asset. Cover someone
+already holds is unaffected.
+
+There are two different, deliberately separate ways to ask "is this
+stale": one judges against the newest epoch anyone has posted, the
+other judges against the epoch the stored score actually came from.
+They can disagree, because a dispute or a gap can stall the score on
+an older hour while fresh postings keep arriving. Prefer the
+score-based check (what the app calls `check_stale`, exposed through
+the SDK as `al.oracle.isStale`) wherever the real question is "can I
+trust this asset's current score," since that's the one that catches a
+stalled score even while new data keeps posting.
+
+## Credit events: the full lifecycle
+
+A credit event is what actually unlocks a payout from cover. Scores and
+bands are advisory. Only a declared event pays out.
+
+```mermaid
+stateDiagram-v2
+  [*] --> None
+  None --> Proposed: anyone proposes
+  Proposed --> Declared: no challenge before the window closes
+  Proposed --> Cured: price recovers during the challenge window
+  Proposed --> Challenged: challenged
+  Challenged --> Escalated: automatic, same call
+  Escalated --> Declared: committee declares, or a ruling deadline passes
+  Escalated --> Rejected: committee rejects, or a ruling deadline passes
+  Cured --> None: after a cooldown
+  Rejected --> None: after a cooldown
+  Declared --> [*]
+```
+
+- **Proposed**: anyone can propose an event once the on-chain data
+  meets a registered definition (for example: peg below a threshold for
+  most of a trailing window, with only a small number of hours allowed
+  to be missing).
+- **Challenge window**: a fixed window during which anyone can dispute
+  the proposal by posting a bond. No challenge before the window closes
+  means the event becomes Declared.
+- **Challenged, then Escalated**: a challenge immediately escalates to
+  the committee in the same call, so an event never sits open
+  indefinitely waiting for someone to take the next step.
+- **Declared**: terminal. Cover that this event covers can now be
+  triggered and claimed. A band is forced to the Event state, and new
+  cover markets on the asset stay blocked until governance registers a
+  fresh definition.
+- **Rejected or Cured**: the event clears after a cooldown and the
+  asset can be proposed again later if the underlying data still
+  supports it.
+
+If the committee doesn't rule before the ruling deadline, the default
+outcome depends on how the event got there: an escalated proposal
+backed by on-chain data (the data already met the definition) resolves
+in favor of declaring the event, while a claim-based proposal (one that
+rests on human judgment, not recomputable on-chain history) resolves
+against declaring it. Either way, every bond on the event is released
+and nobody is slashed for the committee's silence.
+
+## The cover gate
+
+Before new cover can be bought on an asset, several independent checks
+all have to pass. The app's own display logic treats this as a short
+list of possible reasons a sale is blocked, not a single yes/no flag,
+because a buyer deserves to know which one actually stopped them:
+
+- **Stale**: not enough price history yet, or the score hasn't updated
+  recently enough.
+- **Distressed**: the band is Distress or Event.
+- **An event is in progress**: any event of any kind is Proposed,
+  Challenged, or Escalated for this asset right now.
+- **A recent failure signal**: a trailing window shows the price below
+  threshold, the issuer's redemption endpoint recently down or
+  degraded, a recent clawback or authorization revocation, or (for the
+  rare case where too many hours in that window haven't finished
+  building yet to check safely) too large a backlog of unbuilt hours.
+
+Any one of these blocks a purchase on its own. The gate only ever
+blocks *new* cover: it never touches cover someone already holds, and
+it never cancels a position.
+
+This is also what gives cover its basic guarantee: because a Depeg
+event needs every present hour in its own trailing window to have
+failed, and a buyer could only have bought while that same window was
+still clean, any depeg that eventually triggers a payout necessarily
+started after the purchase, not before it.

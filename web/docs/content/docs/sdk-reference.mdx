@@ -3,11 +3,227 @@ title: SDK reference
 description: Using @sylox/sdk directly.
 ---
 
-## Coming soon
+## Testnet only
 
-This page will document `@sylox/sdk`: the high-level read helpers
-(`al.oracle`, `al.events`), the contract write functions
-(`prepare*`/`confirm*`), and how `SyloxError` surfaces contract error
-codes.
+Everything below talks to the Sylox testnet deployment. Data shown by
+the app and referenced in these docs is sample data until the live
+data service ships.
 
-Testnet only. Sample data until the live data service ships.
+## Installation
+
+`@sylox/sdk` is not yet published to npm. Its `package.json` is marked
+`"private": true` while the SDK itself is still settling, so
+`npm install @sylox/sdk` won't work against the public registry today.
+
+Once it's published, installation will be the ordinary:
+
+```bash
+npm install @sylox/sdk
+```
+
+Until then, if you're working inside this repo (an npm workspace),
+import it exactly the same way: npm's own workspace linking resolves
+`@sylox/sdk` to `packages/sdk` for you, with no path games needed. Code
+outside this repo can't depend on it yet.
+
+## Constructing a `Sylox` instance
+
+```ts
+export const al = new Sylox({
+  network: Networks.Testnet,
+  signer: walletSigner,
+});
+```
+
+`network` presets the RPC URL, network passphrase, and contract ids;
+`Networks.Testnet` is the only network this SDK ships today.
+`signer` is optional: omit it for a read-only consumer (anything that
+only calls `al.oracle`/`al.events`'s read methods), and provide it for
+any write (`al.events.proposeTier1`, `al.events.challenge`, or the
+`prepare*`/`confirm*` functions covered below).
+
+```ts
+export const readOnly = new Sylox({ network: Networks.Testnet });
+```
+
+A `signer` is a plain object, never a wallet library dependency of the
+SDK's own: just a public key and a function that signs a transaction
+XDR string and hands back the signed XDR. If you're using Stellar
+Wallets Kit (or anything with the same shape), its own
+`signTransaction` already matches this interface with no adapter
+needed.
+
+## Reading risk: `al.oracle`
+
+```ts
+export async function readOracle(issuedAsset: string) {
+  const assets = await al.oracle.assets();
+  const riskScore = await al.oracle.score(issuedAsset);
+  const stale = await al.oracle.isStale(issuedAsset);
+  return { assets, riskScore, stale };
+}
+```
+
+`al.oracle` is a thin wrapper: every method returns the contract's own
+decoded value as-is, amounts and epochs as `bigint`, with no display
+formatting. `score()` throws a `SyloxError` (see below) if the asset
+isn't tracked by the oracle at all. `al.oracle` also exposes `band()`
+(derived from `score()`), `latest()` (the newest hourly signal),
+`live()` (the newest sub-epoch, Pending and challengeable), `ring()`
+(the full per-epoch history with each slot's effective state already
+resolved), and `firstEpoch()`.
+
+## Reading events: `al.events`
+
+```ts
+export async function readEvents(issuedAsset: string) {
+  const status = await al.events.status(issuedAsset, "Depeg");
+  const gate = await al.events.coverGate(issuedAsset);
+  const { events } = await al.events.list({ limit: 20 });
+  return { status, gate, events };
+}
+```
+
+`status(asset, kind)` reports whether an event of that kind is open
+for the asset right now. `coverGate(asset)` is the same check
+`buy_cover` runs, so you can show a buyer why a purchase would be
+rejected before they try it. `list()` scans for proposed events and
+resolves each one's current state. `al.events.event(eventId)` reads
+one event record directly by id.
+
+## Writing: `proposeTier1` and `challenge`
+
+The instance methods on `al.events` bundle the signer you passed to
+`new Sylox(...)`, so a write is one call:
+
+```ts
+export async function proposeDepeg(issuedAsset: string) {
+  const result = await al.events.proposeTier1(issuedAsset, "Depeg");
+  return result; // { result: bigint (the new event id), txHash }
+}
+```
+
+Every write is simulated first. If the simulation would fail, the SDK
+throws a `SyloxError` before ever asking the signer to sign anything.
+
+## Writing with explicit control: `prepare*` / `confirm*`
+
+For `finalize` and `checkpoint_cure` (and for any write where you want
+to inspect the prepared transaction, or let the signer change between
+preparing and confirming), use the matching `prepare*`/`confirm*` pair
+directly instead of an instance method:
+
+```ts
+export async function finalizeEvent(eventId: bigint, signer: Signer) {
+  const prepared = await prepareFinalize(Networks.Testnet, eventId, signer);
+  // Inspect `prepared` here if you want to show the user a confirmation
+  // step before signing: the transaction has already been simulated,
+  // so a failure would have thrown before this line.
+  const sent = await confirmFinalize(prepared, signer);
+  return sent.txHash;
+}
+```
+
+`prepareFinalize` simulates `finalize(eventId)` and throws a
+`SyloxError` immediately if it would fail. `confirmFinalize` checks
+that the signer passed to it matches whoever the transaction was
+prepared for, then signs and sends it. The same pattern covers
+`prepareCheckpointCure`/`confirmCheckpointCure`,
+`prepareProposeTier1`/`confirmProposeTier1`, and
+`prepareChallenge`/`confirmChallenge` (the instance methods on
+`al.events` are these same pairs, called back to back, with the
+signer already filled in).
+
+If a simulation reports that an archived ledger entry needs restoring
+first, pass an `onRestoreNeeded` callback in `PrepareOptions`; the SDK
+builds and submits the restore transaction itself once you consent.
+Omitting it, or returning `false`, throws a clear `SyloxError` instead
+of silently proceeding against a transaction that would otherwise
+fail.
+
+## The `SyloxError` shape
+
+Every contract-facing read or write throws `SyloxError`, never a raw
+simulation error, on failure:
+
+```ts
+export async function describeFailure(issuedAsset: string) {
+  try {
+    await al.oracle.score(issuedAsset);
+  } catch (e) {
+    if (e instanceof SyloxError) {
+      return { code: e.code, contractErrorName: e.contractErrorName, message: e.message };
+    }
+    throw e;
+  }
+}
+```
+
+- `code`: the numeric contract error code, or `null` when none could
+  be extracted (a non-contract failure, for example).
+- `contractErrorName`: the Rust `#[contracterror]` enum variant name
+  the code maps to (for example `"WrongState"`, `"UnknownAsset"`), or
+  `null` when this SDK doesn't have a mapping for that code yet.
+- `message`: a plain-English sentence meant to be shown to a user
+  directly, never the raw contract doc-comment text.
+
+See the [contract reference](/docs/contract-reference)'s own "SDK
+error messages" section for the full, generated list of codes and
+messages this SDK currently maps, per contract call.
+
+## `al.events.list()`'s cache: the `CacheAdapter` interface
+
+`al.events.list()` scans the RPC's own event log to find proposed
+events, which can be slow to repeat from a cold start. An optional
+cache adapter lets a consumer persist what's already been scanned:
+
+```ts
+export const defaultCacheAdapter: CacheAdapter = noopCacheAdapter;
+```
+
+`noopCacheAdapter` is the default when you don't pass one: every read
+is a cache miss, which costs an extra RPC scan but never an incorrect
+result, so plain Node usage with no storage at all still works
+correctly. The interface itself is deliberately minimal, two methods
+over plain strings:
+
+```ts
+export const sessionCacheAdapter: CacheAdapter = {
+  get(key) {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      // A full or unavailable sessionStorage is a cache miss, not a failure.
+    }
+  },
+};
+
+export const alWithCache = new Sylox({
+  network: Networks.Testnet,
+  signer: walletSigner,
+  cacheAdapter: sessionCacheAdapter,
+});
+```
+
+For a real-world reference implementation, see the Sylox app's own
+`sessionStorage`-backed adapter at `web/app/lib/sylox-cache-adapter.ts`
+in this repository: it wraps every `get`/`set` in a `try`/`catch` so a
+missing or locked-down `sessionStorage` (SSR, a private window, a full
+quota) degrades to a cache miss rather than a thrown error, the same
+shape as the example above.
+
+## Working with amounts
+
+Amounts are `bigint` in base units everywhere in this SDK; nothing
+converts for you inside a write path. `al.fx` (exported as plain
+functions, not an instance member, since it needs no network or
+signer) converts for display only: `toNumber()` turns a scaled `i128`
+like `peg_ratio` into a plain JS number, and `usdc()` turns a decimal
+string like `"20000.5"` into its base-unit `bigint`.

@@ -3,10 +3,155 @@ title: Integration guides
 description: How to read contract state and submit transactions from your own client.
 ---
 
-## Coming soon
+## Testnet only
 
-This page will walk through integrating directly with the Sylox
-contracts: reading risk scores and event state, constructing and
-simulating a write, and handling contract errors.
+Everything below runs against the Sylox testnet deployment. Data shown
+by the app and referenced in these docs is sample data until the live
+data service ships.
 
-Testnet only. Sample data until the live data service ships.
+These guides use `@sylox/sdk`. See the [SDK reference](/docs/sdk-reference)
+for how to install and construct a `Sylox` instance; every example here
+assumes you already have one (`al`), built with either a signer (for
+writes) or without one (read-only).
+
+## Wallets: show issuer risk
+
+For each issued asset a user holds, read its band and staleness, then
+show a plain label. Treat staleness as its own case, not as a band
+value: a stale score is never "current," whatever band it happens to
+carry.
+
+```ts
+export async function showIssuerRisk(al: Sylox, issuedAsset: string) {
+  const band = await al.oracle.band(issuedAsset);
+  const stale = await al.oracle.isStale(issuedAsset);
+
+  if (stale) {
+    return "Data stale";
+  }
+  switch (band.tag) {
+    case "Normal":
+      return "Normal";
+    case "Watch":
+      return "Watch";
+    case "Warning":
+      return "Warning";
+    case "Distress":
+      return "Distress";
+    case "Event":
+      return "Event";
+  }
+}
+```
+
+An asset the oracle doesn't track at all throws a `SyloxError` with
+`contractErrorName: "UnknownAsset"` (see the [SDK reference](/docs/sdk-reference)
+for the error shape). Show "Not rated" for that case, never "Safe":
+not being tracked is not the same claim as being tracked and healthy.
+
+Link from the badge to the asset's own page in the app so a user sees
+the signals behind the label, not just a color.
+
+## Lending protocols: use bands in risk parameters
+
+A lending protocol reads the band at the moment it needs it (borrow
+time, inside its own contract call) rather than caching it across
+ledgers, so it can never act on a value that's gone stale since it was
+read. Something like:
+
+```rust
+let oracle = RiskOracleClient::new(&env, &oracle_addr);
+let band = oracle.band(&collateral_asset);
+let stale = oracle.check_stale(&collateral_asset);
+let factor_bps = match (band, stale) {
+    (_, true) => 0,                       // treat stale as unsafe for new borrows
+    (Band::Normal, _) => base_factor_bps,
+    (Band::Watch, _) => base_factor_bps * 9 / 10,
+    (Band::Warning, _) => base_factor_bps / 2,
+    _ => 0,                                // Distress or Event: no new borrows
+};
+```
+
+Use the band for new borrows and limits, not as a trigger to liquidate
+an existing position on its own: a band change is a risk signal, not a
+credit event, and only a declared event is a statement that something
+has actually gone wrong.
+
+## Buyers: check before you buy, and read the real definitions
+
+`buy_cover` (on the `Series` contract you're buying from) rejects if
+the asset is stale, if its band is Distress or Event, or if the cover
+gate reports anything other than Clear. Checking all three yourself
+first means you can show a buyer why a purchase would fail before they
+sign anything:
+
+```ts
+export async function checkBeforeBuying(al: Sylox, issuedAsset: string) {
+  const stale = await al.oracle.isStale(issuedAsset);
+  const { band } = await al.oracle.score(issuedAsset);
+  const gate = await al.events.coverGate(issuedAsset);
+
+  const blocked = stale || band.tag === "Distress" || band.tag === "Event" || gate.tag !== "Clear";
+  return { blocked, band: band.tag, gate: gate.tag };
+}
+```
+
+Before buying, read the actual definition the series pins for each
+kind it covers, not marketing text: it's the contract. `al.events`
+doesn't wrap a direct definition read yet, but `status` tells you
+whether an event for a given kind is currently open:
+
+```ts
+export async function readDepegDefinition(al: Sylox, issuedAsset: string) {
+  const status = await al.events.status(issuedAsset, "Depeg");
+  return status;
+}
+```
+
+Buy cover equal to what you'd actually lose, not more, since per-buyer
+caps apply anyway. Keep cover units in the account that will claim
+them: if you move them, whoever holds them when the event is declared
+is the one who claims.
+
+## Sellers: monitor your exposure
+
+Your maximum loss on a series is whatever cover you've written, never
+more than your own locked collateral. Premiums only unlock once the
+series is Triggered or Expired, so there's no way to collect premium
+and exit before the outcome is known.
+
+Watching for a declared event on your asset lets you see exposure
+coming before a buyer claims against it:
+
+```ts
+export async function watchForDeclaredEvent(al: Sylox, issuedAsset: string) {
+  const { events } = await al.events.list({ limit: 10 });
+  return events.filter((event) => event.asset === issuedAsset && event.state.tag === "Declared");
+}
+```
+
+You can't exit cover you've already written early, except by
+transferring your whole position to someone else who accepts it and
+holds no existing position in that series.
+
+## Reporters and anyone recomputing signals
+
+Keeper data (the signals behind peg ratio, liquidity, and the rest) is
+meant to be recomputed independently from public ledger history.
+Anyone who recomputes a posting and gets a different answer can
+dispute it, and anyone who sees the recomputed data meet an event
+definition can propose an event:
+
+```ts
+export async function proposeAndChallenge(al: Sylox, issuedAsset: string, suspectEventId: bigint, evidenceHash: Uint8Array) {
+  const proposed = await al.events.proposeTier1(issuedAsset, "Depeg");
+  const challenged = await al.events.challenge(suspectEventId, evidenceHash);
+  return { proposed, challenged };
+}
+```
+
+A challenge requires a bond, and a lost challenge forfeits it, so only
+challenge a proposal you've actually recomputed and believe is wrong.
+Running a reporter node (the endpoint-health probing network) or a
+full keeper is covered separately: see
+[Running a keeper or reporter](/docs/running-a-keeper-or-reporter).
