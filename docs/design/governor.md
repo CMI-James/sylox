@@ -59,7 +59,7 @@ The constructor validates its arguments (Section 2.1) and stores them, and calls
 | Change | Only through `Action::SetSigners(Vec<Address>, u32)`, 14 day timelock, same validation |
 | Auth | Each signer authorizes its own call (`signer.require_auth()`); a signer can be an account or a multisig account, the Governor does not care |
 
-**Signer changes and pending actions** (D15): `execute` counts only approvals from addresses that are signers at execution time, and compares that count with the threshold at execution time. A removed signer's earlier approval stops counting. Pending actions are not cancelled when `SetSigners` executes.
+**Signer changes and pending actions** (D15): `execute` counts only approvals from addresses that are signers at execution time, and compares that count with the threshold at execution time. A removed signer's earlier approval stops counting. Pending actions are not cancelled when `SetSigners` executes. An Approved action still accepts approvals until `expires_at`, so one that a signer change dropped below the threshold recovers when current signers approve it (review of #88).
 
 ### 2.2 Committee and guardian
 
@@ -128,6 +128,7 @@ States and transitions are exactly Section 17.1's `ActionState` and Section 17.2
 | (none) | Queued | `queue(proposer, action)` | `proposer` is a signer; the action passes queue-time checks (4.4) | `NotSigner`, `InvalidAction`, `InvalidSigners` |
 | Queued | Queued | `approve(signer, id)` | `signer` is a signer, has not approved yet, `now <= expires_at`; approvals still below threshold after adding it | `NotSigner`, `AlreadyApproved`, `ActionExpired`, `WrongState`, `UnknownAction` |
 | Queued | Approved | `approve(signer, id)` | as above, and the approval count reaches the threshold | as above |
+| Approved | Approved | `approve(signer, id)` | as above; the action stays Approved, and the extra approval counts at execution (D15) | as above |
 | Approved | Executed | `execute(id)` | approvals from current signers `>= threshold` (D15), `now >= eta`, `now <= expires_at`; the target call succeeds | `ThresholdNotMet`, `TimelockActive`, `ActionExpired`, `WrongState`, `UnknownAction`, or the target's own error |
 | Queued, Approved | Cancelled | `cancel(signers, id)` | Section 5 | `ThresholdNotMet`, `NotSigner`, `WrongState`, `UnknownAction` |
 | Queued, Approved | Expired | none (lazy) | `now > expires_at`; reported by `action(id)`, rejected by `execute` and `approve` | |
@@ -192,7 +193,7 @@ Everything else is checked by the target at execution.
 `cancel(signers: Vec<Address>, action_id)` works synchronously, in one call (D6, deviation 5). Two ways through it:
 
 - **By threshold**, in state Queued or Approved: every address in `signers` authorizes the call (`require_auth`), and the number of distinct addresses in the list that are current signers must reach the threshold. Otherwise `ThresholdNotMet`.
-- **By the proposer alone**, only while the action is still Queued: `signers` is exactly `[proposer]`, the proposer recorded in the action, and it authorizes. Once the action reaches Approved, the proposer alone can no longer cancel it; only the threshold route works.
+- **By the proposer alone**, only while the action is still Queued and the proposer is still a current signer: `signers` is exactly `[proposer]`, the proposer recorded in the action, and it authorizes. A proposer removed by `SetSigners` cannot cancel alone (`NotSigner`). Once the action reaches Approved, the proposer alone can no longer cancel it; only the threshold route works.
 
 Cancelled is terminal. A cancelled action cannot be approved or executed again (`WrongState`).
 
@@ -376,7 +377,7 @@ Each question from the first draft, with the decision taken in review of #87. Th
 3. **D3. Guardian.** `guardian` is a `Config` field, changed only through the new `Action::SetGuardian(Address)` with a 14 day timelock. No separate `Guardian` contract.
 4. **D4. When the timelock starts.** `eta = queue time + timelock`, as in Section 17.1. Approvals can arrive during the wait.
 5. **D5. Missing timelocks.** `UpdateAsset` 7 days. `DisableAsset`, `RemoveKeeper` and `RemoveReporter` 2 days each, since they are protective.
-6. **D6. Cancel.** `cancel(signers: Vec<Address>, action_id)`, synchronous: each listed signer authorizes, and the distinct current signers in the list must reach the threshold. The proposer can also cancel its own action alone while it is still Queued, but not once it is Approved.
+6. **D6. Cancel.** `cancel(signers: Vec<Address>, action_id)`, synchronous: each listed signer authorizes, and the distinct current signers in the list must reach the threshold. The proposer can also cancel its own action alone while it is still Queued, but not once it is Approved, and only while it is still a current signer (review of #88).
 7. **D7. Unpause.** Full threshold, no waiting time.
 8. **D8. Renewing a pause.** The guardian cannot extend a pause: `pause` on a scope that is already paused fails with `AlreadyPaused` (609). Renewal is `Action::Pause(scope)`: 0 day timelock, full threshold, resets the lapse time. Executing it always sets the lapse to `now + max_pause_secs`, so the signers can also use it to pause a scope that is not paused yet.
 9. **D9. How targets read the switch.** The Governor keeps the `paused(scope)` read. `Series` checks it through a forwarding `paused(scope)` read on `MarketFactory`. No `Series` constructor change.
@@ -385,7 +386,7 @@ Each question from the first draft, with the decision taken in review of #87. Th
 12. **D12. Setters no action reached.** Typed `Action` variants, appended to the enum in `sylox_types`, each matching its target setter's exact signature: `SetSubEpochSecs(asset, value)` 7 days, `SetHardCap(asset, amount)` 7 days, `SetRelatedSellers(asset, list)` 2 days, `SetPriceGuard(asset, guard)` 7 days, `SetFactory(factory)` 14 days. No generic "call anything" action.
 13. **D13. Migration after upgrade, and the note binding.** First write a test showing whether `upgrade` followed by `migrate` in one `execute` runs the new code for `migrate`. If it does, `execute(Upgrade)` does both. If it does not, add `Action::Migrate(Address)` with a 0 day timelock and the full threshold. Linking the migration note and the decode test off-chain, as Section 6.4 describes, is enough for v1.
 14. **D14. The Governor's own upgrade.** Only through `Action::Upgrade(self, hash)`, in-process. No exported `upgrade` symbol. Its own migration runs automatically on the first state-changing call under the new code, guarded by `MigrationVersion`.
-15. **D15. Signer changes and pending actions.** Count only current signers, check the threshold at execution time, and do not auto-cancel pending actions.
+15. **D15. Signer changes and pending actions.** Count only current signers, check the threshold at execution time, and do not auto-cancel pending actions. `approve` accepts an action that is Queued or Approved, before `expires_at`, so an Approved action that a signer change dropped below the threshold can recover with new approvals (review of #88).
 16. **D16. Committee rotation and misses.** Intended: a miss is recorded against whoever is the committee when it is resolved. Documented in Section 7.
 17. **D17. Approving after `eta`.** Allowed. The last approval never executes the action by itself; `execute` is a separate call.
 18. **D18. Duplicate actions.** Allowed. Each one still needs the threshold.
