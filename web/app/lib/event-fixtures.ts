@@ -47,7 +47,7 @@ const NOW_FIXTURE = BigInt(Math.floor(Date.now() / 1000));
 const FIXTURE_DEFINITION_SENTENCE =
   "Issuer freeze: clawbacks or authorization revocations above 5% of supply within 7 days, or more than 2 revocations in that window.";
 
-/** Proposed, still inside its challenge window - exercises the countdown-to-challenge-deadline and both the Checkpoint and Finalize buttons (Finalize will itself reject with "challenge window open," shown in plain words, same as the real contract would). */
+/** Proposed, still inside its challenge window - exercises the countdown-to-challenge-deadline, the Checkpoint button, and Finalize shown disabled with an "Available in ~23h" note (EventPageClient.tsx disables it for exactly this phase, rather than letting a click reach simulate and reject with "challenge window open"). */
 export const FIXTURE_PROPOSED: EventPageData = {
   proposal: {
     status: "ok",
