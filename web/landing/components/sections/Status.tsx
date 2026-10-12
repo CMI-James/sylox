@@ -19,16 +19,30 @@ const MARKER: Record<ItemState, string> = {
   future: "border border-cement-grey/60",
 };
 
+// future's text-anchor-graphite/60 and /50 both failed WCAG AA against
+// this section's light (silo-oatmeal) background (3.63:1 and 2.80:1 vs a
+// 4.5:1 minimum - axe color-contrast, "serious"). anchor-graphite/70 is
+// the lightest opacity of the lightest passing token that still clears
+// 4.5:1 (4.77:1) - kept as low as it can go so "future" rows still read
+// visibly lighter than "done"/"active" rows at full opacity.
 const LABEL: Record<ItemState, string> = {
   done: "text-slate-black",
   active: "text-slate-black",
-  future: "text-anchor-graphite/60",
+  future: "text-anchor-graphite/70",
 };
 
+// active's text-risk-crimson failed WCAG AA here too (3.08:1) - and
+// unlike the /60 and /50 cases above, there's no passing opacity for it:
+// risk-crimson tops out at 3.08:1 even at full (100%) opacity against
+// this background, so no amount of redder/darker opacity reaches 4.5:1.
+// text-anchor-graphite is the lightest token that does pass (11.49:1);
+// the red hue itself has no WCAG-AA-safe form on this light background
+// in the current palette (flagged in the PR as a design-system gap, not
+// fixed here - no new colour, no token change).
 const TAG: Record<ItemState, string> = {
   done: "text-anchor-graphite",
-  active: "text-risk-crimson",
-  future: "text-anchor-graphite/50",
+  active: "text-anchor-graphite",
+  future: "text-anchor-graphite/70",
 };
 
 /**
