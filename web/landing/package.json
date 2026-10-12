@@ -13,7 +13,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@gsap/react": "^2.1.2",
     "@sylox/ui": "*",
     "gsap": "^3.12.7",
     "lenis": "^1.1.20",

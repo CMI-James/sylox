@@ -4,7 +4,11 @@
 // "brief §X" when it's drawn directly from the build brief itself. Claims
 // with no `_source` are generic marketing language, not factual claims.
 
-import type { HeroCta } from "@/components/hero/HeroPanel";
+export interface HeroCta {
+  label: string;
+  href: string;
+  variant: "primary" | "secondary";
+}
 
 interface HeroPanelCopy {
   eyebrow: string;
@@ -33,11 +37,17 @@ export const nav = {
 };
 
 export const hero = {
+  // Only panels[0] is ever rendered — SimpleHero.tsx is the live hero and
+  // only reads hero.panels[0]. The scrolling multi-panel hero (HeroPanel.tsx,
+  // panels 2-4 below) was never wired into page.tsx; removed as dead code
+  // (see PR #80 follow-up, commit "remove dead code from web/landing").
+  // Kept as a one-item array (not a bare object) so SimpleHero.tsx's
+  // existing `hero.panels[0]` lookup doesn't need to change.
   panels: [
     // satisfies HeroPanelCopy[] below checks each literal (e.g. variant:
     // "primary") against the real component props at the definition site,
     // so every consumer of hero.panels gets properly narrowed types with
-    // no local cast — see HeroPanel's HeroCta type.
+    // no local cast — see the HeroCta type above.
     {
       eyebrow: "+ RISK INFRASTRUCTURE FOR STELLAR",
       heading: "Know your issuer before it fails.",
@@ -47,24 +57,6 @@ export const hero = {
         { label: "Read the docs", href: "https://docs.sylox.xyz/docs", variant: "secondary" },
       ] as HeroCta[],
       _source: "landing/copy-and-docs-links brief, Hero section",
-    },
-    {
-      eyebrow: "+ 01 / RISK ORACLE",
-      heading: "Signals in. One score out.",
-      body: "Price against the peg. Liquidity depth. Redemptions. Clawbacks and frozen accounts. Whether the anchor's withdrawals still answer. Sylox combines them into one open score from 0 to 100.",
-      _source: "brief §7.2 panel 2; signals per technical-doc.md §5.1, score range per §6.3",
-    },
-    {
-      eyebrow: "+ 02 / CREDIT EVENTS",
-      heading: "When the peg breaks, the rules are already written.",
-      body: "A depeg or an issuer freeze is defined in public, before anyone buys cover. When the conditions are met, the event is declared. No one decides after the fact.",
-      _source: "brief §7.2 panel 3; event definitions per prd.md §6.1, technical-doc.md §4.3/§8.2",
-    },
-    {
-      eyebrow: "+ 03 / PROTECTION MARKETS",
-      heading: "Cover pays from collateral that is already locked.",
-      body: "Sellers lock USDC. Buyers pay a premium for cover. If a credit event is declared, cover pays out. Every unit of cover is fully backed.",
-      _source: "brief §7.2 panel 4; collateral model per prd.md §7",
     },
   ] satisfies HeroPanelCopy[],
 };
