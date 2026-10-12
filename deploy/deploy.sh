@@ -326,7 +326,7 @@ $out"
   log "minted $DEMO_KEEPER_BOND DMUSD to the demo keeper"
 
   log "[5/8] Precomputing contract addresses (constructor flow, deploy.sh testnet's own technique)"
-  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v9"
+  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v10"
   salt_for_demo() {
     local contract="$1"
     echo -n "${CONSTRUCTOR_NONCE_DEMO}-${contract}" | shasum -a 256 | cut -d' ' -f1
