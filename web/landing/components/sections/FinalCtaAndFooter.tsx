@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import Image from "next/image";
-import { footer, openSource, nav } from "@/content";
+import { footer, openSource } from "@/content";
 import { useScrollReveal } from "@/lib/motion/useScrollReveal";
 
 /**
@@ -55,19 +55,30 @@ export function FinalCtaAndFooter() {
           <div className="flex flex-col gap-6 pt-8 text-sm text-cyber-tin md:flex-row md:items-center md:justify-between">
             <p className="text-xs">{footer.tagline}</p>
             <nav className="flex gap-6" aria-label="Footer">
+              <a href={footer.links.docs} className="hover:text-silo-oatmeal">
+                Docs
+              </a>
+              <a href={footer.links.sdkReference} className="hover:text-silo-oatmeal">
+                SDK reference
+              </a>
+              <a href={footer.links.contractReference} className="hover:text-silo-oatmeal">
+                Contract reference
+              </a>
               <a
-                href={nav.github.href}
+                href={footer.links.spec}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-silo-oatmeal"
+              >
+                Spec
+              </a>
+              <a
+                href={footer.links.github}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-silo-oatmeal"
               >
                 GitHub
-              </a>
-              <a href={footer.links.x} className="hover:text-silo-oatmeal">
-                X
-              </a>
-              <a href={footer.links.contact} className="hover:text-silo-oatmeal">
-                Contact
               </a>
             </nav>
           </div>

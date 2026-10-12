@@ -10,9 +10,10 @@ import { Eyebrow } from "@sylox/ui/components";
 /**
  * Full-bleed two-column row, no max-w-* on the outer grid (same pattern as
  * How It Works' row block) so it spans edge to edge instead of sitting
- * centered with gutters. Left: eyebrow, heading, two-paragraph body (same
- * copy as before — the giant scroll-scrubbed word reveal is gone, it
- * doesn't fit a half-width column). Right: the real Sylox demo video,
+ * centered with gutters. Left: eyebrow, heading, body rendered as a list
+ * of short paragraphs (problem.paragraphs — the brief's five beats, each
+ * its own <p>, not regrouped — the giant scroll-scrubbed word reveal is
+ * gone, it doesn't fit a half-width column). Right: the real Sylox demo video,
  * autoplaying muted while scrolled into view and pausing out of view
  * (useInViewport, same primitive canvases/timelines use elsewhere on this
  * page for the same reason) with a manual mute toggle. Stays on the
@@ -59,12 +60,14 @@ export function ProblemStatement() {
             {problem.heading}
           </h2>
           <div className="mt-8 flex max-w-xl flex-col gap-6">
-            <p className="text-base leading-relaxed text-anchor-graphite md:text-lg">
-              {problem.bodyLeft}
-            </p>
-            <p className="text-base leading-relaxed text-anchor-graphite md:text-lg">
-              {problem.bodyRight}
-            </p>
+            {problem.paragraphs.map((paragraph, index) => (
+              <p
+                key={index}
+                className="text-base leading-relaxed text-anchor-graphite md:text-lg"
+              >
+                {paragraph}
+              </p>
+            ))}
           </div>
         </div>
 

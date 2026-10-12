@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 const EVENT_NAME = "sylox:mobile-menu-toggle";
 
 /**
@@ -12,21 +10,14 @@ const EVENT_NAME = "sylox:mobile-menu-toggle";
  * canvas can paint above a CSS z-index/isolation stacking context on
  * some browsers — the only fully reliable fix is to stop rendering it,
  * not just cover it.
+ *
+ * The matching listener hook (useMobileMenuOpen) was removed as dead
+ * code (PR #80 follow-up): the WebGL canvas it was meant to unmount
+ * (AntigravityField) isn't mounted anywhere in the live tree, so nothing
+ * currently listens for this event. This dispatcher is kept since
+ * Header.tsx still calls it, and re-adding a listener hook later is a
+ * cheap, obvious addition if that canvas comes back.
  */
 export function setMobileMenuOpen(isOpen: boolean) {
   window.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: isOpen }));
-}
-
-export function useMobileMenuOpen(): boolean {
-  const [isOpen, setIsOpen] = useState(false);
-
-  useEffect(() => {
-    const handler = (event: Event) => {
-      setIsOpen((event as CustomEvent<boolean>).detail);
-    };
-    window.addEventListener(EVENT_NAME, handler);
-    return () => window.removeEventListener(EVENT_NAME, handler);
-  }, []);
-
-  return isOpen;
 }

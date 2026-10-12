@@ -137,7 +137,14 @@ export function ScoreScale() {
           <p className="sr-only" role="status" aria-live="polite">
             Current illustrative score: {isEvent ? "Event declared" : displayScore}, band {band.label}
           </p>
-          <p className="mt-2 font-mono text-[10px] uppercase tracking-wide text-cyber-tin/70 md:mt-4 md:text-xs">
+          {/* text-cyber-tin/70 (opacity-reduced) failed WCAG AA against
+              this card's dynamic color-mix background: 4.28:1 for 12px
+              text on the "normal" band's mix, vs. a 4.5:1 minimum (axe
+              color-contrast, "serious") — and gets worse on "watch", the
+              band mix with the least contrast. Full-opacity text-cyber-tin
+              (already used one line up for the band label) passes on every
+              band's mix, 6.82:1 to 8.00:1. */}
+          <p className="mt-2 font-mono text-[10px] uppercase tracking-wide text-cyber-tin md:mt-4 md:text-xs">
             {scoreScale.sampleLabel}
           </p>
         </div>

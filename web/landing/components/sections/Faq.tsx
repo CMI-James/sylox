@@ -1,10 +1,39 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { faq } from "@/content";
 import { useScrollReveal } from "@/lib/motion/useScrollReveal";
 import { Eyebrow } from "@sylox/ui/components";
+
+// Renders `answer` as plain text, except each `answerLinks` entry's exact
+// `text` substring becomes a link - keeps the brief's copy word-for-word
+// (no "Read more" bolted on) while still making "Sylox SDK" and "the
+// integration guides" real links into the docs site.
+function renderAnswer(answer: string, answerLinks?: { text: string; href: string }[]) {
+  if (!answerLinks || answerLinks.length === 0) return answer;
+
+  let remaining = answer;
+  const nodes: React.ReactNode[] = [];
+  for (const { text, href } of answerLinks) {
+    const index = remaining.indexOf(text);
+    if (index === -1) {
+      nodes.push(remaining);
+      remaining = "";
+      continue;
+    }
+    nodes.push(remaining.slice(0, index));
+    nodes.push(
+      <a href={href} className="underline underline-offset-2 hover:text-slate-black">
+        {text}
+      </a>,
+    );
+    remaining = remaining.slice(index + text.length);
+  }
+  nodes.push(remaining);
+
+  return nodes.map((node, index) => <Fragment key={index}>{node}</Fragment>);
+}
 
 export function Faq() {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
@@ -52,7 +81,7 @@ export function Faq() {
                 >
                   <div className="overflow-hidden">
                     <p className="max-w-xl pb-6 text-sm leading-relaxed text-anchor-graphite md:text-base">
-                      {item.answer}
+                      {renderAnswer(item.answer, item.answerLinks)}
                     </p>
                   </div>
                 </div>

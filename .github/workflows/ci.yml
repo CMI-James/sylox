@@ -209,6 +209,24 @@ jobs:
       - name: Unit tests, web/app
         run: npm test
         working-directory: web/app
+      # Same rule and the same guard pattern as the `docs` job's own
+      # banned-word check below: Sylox is protection, never insurance, and
+      # never promises a fixed or guaranteed return. Scoped to content.ts
+      # (the single source of truth for landing copy, per its own header
+      # comment), app/ (page metadata: <title>, meta description, Open
+      # Graph/Twitter text) and components/ (section components carry a
+      # handful of their own literal strings too - e.g. alt text, aria
+      # labels, Faq.tsx's own "Questions, answered plainly." heading) -
+      # not the whole web/landing tree, so this never flags copy inside
+      # node_modules, generated build output, or test files asserting
+      # against this exact check.
+      - name: Check for banned words in web/landing content
+        working-directory: web/landing
+        run: |
+          if grep -rinE '\b(insurance|insured?|guarantee[ds]?|APY)\b' content.ts app/ components/; then
+            echo "::error::Found a banned word (insurance/insured/insure/guarantee/guaranteed/APY) in web/landing content. Sylox is protection, not insurance, and never promises a guaranteed return."
+            exit 1
+          fi
       - name: Build web/landing
         run: npm run build -w web/landing
       - name: Build web/app

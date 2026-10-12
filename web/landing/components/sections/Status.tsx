@@ -19,16 +19,34 @@ const MARKER: Record<ItemState, string> = {
   future: "border border-cement-grey/60",
 };
 
+// future's text-anchor-graphite/60 and /50 both failed WCAG AA against
+// this section's light (silo-oatmeal) background (3.63:1 and 2.80:1 vs a
+// 4.5:1 minimum - axe color-contrast, "serious"). anchor-graphite/70 is
+// the lightest opacity of the lightest passing token that still clears
+// 4.5:1 (4.77:1) - kept as low as it can go so "future" rows still read
+// visibly lighter than "done"/"active" rows at full opacity.
 const LABEL: Record<ItemState, string> = {
   done: "text-slate-black",
   active: "text-slate-black",
-  future: "text-anchor-graphite/60",
+  future: "text-anchor-graphite/70",
 };
 
+// active's text-risk-crimson failed WCAG AA here too (3.08:1) - and
+// unlike the /60 and /50 cases above, there's no passing opacity for it:
+// risk-crimson tops out at 3.08:1 even at full (100%) opacity against
+// this background, so no amount of redder/darker opacity reaches 4.5:1.
+// text-anchor-graphite is the lightest token that does pass (11.49:1);
+// the red hue itself has no WCAG-AA-safe form on this light background
+// in the current palette (flagged in the PR description as a
+// design-system follow-up, not fixed here - no new colour, no token
+// change). David picked bringing red back as a non-text marker instead:
+// a 1px risk-crimson border on the active tag. Non-text/UI elements only
+// need 3:1 (WCAG 1.4.11), and risk-crimson's own 3.08:1 against this
+// background clears that - same red, same token, just never as text.
 const TAG: Record<ItemState, string> = {
   done: "text-anchor-graphite",
-  active: "text-risk-crimson",
-  future: "text-anchor-graphite/50",
+  active: "text-anchor-graphite border border-risk-crimson px-1.5 py-0.5",
+  future: "text-anchor-graphite/70",
 };
 
 /**
@@ -78,7 +96,14 @@ export function Status() {
           <div data-reveal className="mt-12 md:mt-20">
             <div className="font-display text-7xl leading-none tracking-tight text-slate-black md:text-8xl">
               {doneCount}
-              <span className="text-cement-grey">/{status.items.length}</span>
+              {/* text-cement-grey here failed WCAG AA against this
+                  section's light (silo-oatmeal) background: 2.79:1 for a
+                  measured 72pt span, vs. a 3:1 minimum (axe color-contrast,
+                  "serious"). text-anchor-graphite is the lightest token in
+                  the design system that still passes here (11.49:1) — see
+                  the "cement-grey fails contrast on light backgrounds"
+                  flag in the PR description. */}
+              <span className="text-anchor-graphite">/{status.items.length}</span>
             </div>
             <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-anchor-graphite/70 md:text-xs">
               Steps shipped
@@ -98,7 +123,12 @@ export function Status() {
                   aria-hidden="true"
                   className={`h-2 w-2 shrink-0 translate-y-[-0.1em] rounded-full ${MARKER[state]}`}
                 />
-                <span className="w-6 shrink-0 font-mono text-xs text-cement-grey">
+                {/* text-cement-grey here failed WCAG AA against this
+                    section's light (silo-oatmeal) background: 2.79:1 for
+                    12px text, vs. a 4.5:1 minimum (axe color-contrast,
+                    "serious"). text-anchor-graphite is the lightest token
+                    that still passes here (11.49:1). */}
+                <span className="w-6 shrink-0 font-mono text-xs text-anchor-graphite">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <p className={`flex-1 text-base leading-snug md:text-lg ${LABEL[state]}`}>
