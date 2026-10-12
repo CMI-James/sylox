@@ -434,11 +434,11 @@ fn approvals_reach_the_threshold_and_move_to_approved() {
     assert_eq!(queued.state, ActionState::Approved);
     assert_eq!(queued.approvals.len(), 2);
 
-    assert_eq!(
-        fx.gov.try_approve(&fx.signers[0], &id),
-        Err(Ok(Error::WrongState)),
-        "approvals are collected while Queued only"
-    );
+    // Approved actions still take approvals (D15) and stay Approved.
+    fx.gov.approve(&fx.signers[0], &id);
+    let queued = fx.gov.action(&id).unwrap();
+    assert_eq!(queued.state, ActionState::Approved);
+    assert_eq!(queued.approvals.len(), 3);
     assert_eq!(
         fx.gov.try_approve(&Address::generate(&env), &id),
         Err(Ok(Error::NotSigner))
@@ -570,6 +570,57 @@ fn a_removed_signers_approval_stops_counting() {
     );
 }
 
+/// D15: an Approved action that a `SetSigners` dropped below the
+/// threshold recovers when a new signer approves it.
+#[test]
+fn an_approved_action_below_threshold_after_a_signer_change_recovers() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let committee = Address::generate(&env);
+    let pending = queue_and_approve(&fx, &Action::SetCommittee(committee.clone()));
+    assert_eq!(
+        fx.gov.action(&pending).unwrap().state,
+        ActionState::Approved
+    );
+
+    // Signer 1, one of its two approvers, is replaced.
+    let newcomer = Address::generate(&env);
+    pass(
+        &env,
+        &fx,
+        &Action::SetSigners(
+            vec![
+                &env,
+                fx.signers[0].clone(),
+                newcomer.clone(),
+                fx.signers[2].clone(),
+            ],
+            2,
+        ),
+    );
+    assert_eq!(
+        fx.gov.try_execute(&pending),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+
+    fx.gov.approve(&newcomer, &pending);
+    assert_eq!(
+        fx.gov.action(&pending).unwrap().state,
+        ActionState::Approved
+    );
+    fx.gov.execute(&pending);
+    assert_eq!(fx.gov.committee(), committee);
+    assert_eq!(
+        fx.gov.action(&pending).unwrap().state,
+        ActionState::Executed
+    );
+    assert_eq!(
+        fx.gov.try_approve(&fx.signers[2], &pending),
+        Err(Ok(Error::WrongState)),
+        "no approvals once Executed"
+    );
+}
+
 #[test]
 fn a_raised_threshold_applies_to_actions_already_approved() {
     let env = Env::default();
@@ -688,6 +739,38 @@ fn the_proposer_alone_can_cancel_while_queued_but_not_once_approved() {
     assert_eq!(
         fx.gov.try_cancel(&proposer, &approved),
         Err(Ok(Error::WrongState))
+    );
+}
+
+/// D6: the proposer-alone route needs the proposer to still be a
+/// current signer.
+#[test]
+fn a_removed_proposer_cannot_cancel_alone() {
+    let env = Env::default();
+    let fx = setup(&env);
+    let queued = fx.gov.queue(
+        &fx.signers[0],
+        &Action::SetCommittee(Address::generate(&env)),
+    );
+    pass(
+        &env,
+        &fx,
+        &Action::SetSigners(vec![&env, fx.signers[1].clone(), fx.signers[2].clone()], 2),
+    );
+    assert_eq!(fx.gov.action(&queued).unwrap().state, ActionState::Queued);
+    assert_eq!(
+        fx.gov
+            .try_cancel(&vec![&env, fx.signers[0].clone()], &queued),
+        Err(Ok(Error::NotSigner))
+    );
+    // The current signers still can.
+    fx.gov.cancel(
+        &vec![&env, fx.signers[1].clone(), fx.signers[2].clone()],
+        &queued,
+    );
+    assert_eq!(
+        fx.gov.action(&queued).unwrap().state,
+        ActionState::Cancelled
     );
 }
 

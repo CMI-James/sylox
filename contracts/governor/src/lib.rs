@@ -184,9 +184,11 @@ impl Governor {
         Ok(queued.id)
     }
 
-    /// Auth: `signer`, which must be a current signer. Allowed until
-    /// `expires_at`, including after `eta` (D17); never executes the
-    /// action itself.
+    /// Auth: `signer`, which must be a current signer. Allowed while the
+    /// action is Queued or Approved, until `expires_at`, including after
+    /// `eta` (D17); never executes the action itself. Approving an
+    /// Approved action lets it recover after a `SetSigners` drops its
+    /// current-signer approvals below the threshold (D15).
     pub fn approve(env: Env, signer: Address, action_id: u64) -> Result<(), Error> {
         let config = begin(&env)?;
         signer.require_auth();
@@ -194,7 +196,7 @@ impl Governor {
             return Err(Error::NotSigner);
         }
         let mut queued = load_live(&env, action_id)?;
-        if queued.state != ActionState::Queued {
+        if queued.state != ActionState::Queued && queued.state != ActionState::Approved {
             return Err(Error::WrongState);
         }
         if queued.approvals.contains(&signer) {
@@ -254,8 +256,8 @@ impl Governor {
 
     /// D6 (deviation 5). Every address in `signers` authorizes. Either
     /// the distinct current signers listed reach the threshold (Queued
-    /// or Approved), or `signers` is exactly the action's own proposer
-    /// and the action is still Queued.
+    /// or Approved), or `signers` is exactly the action's own proposer,
+    /// still a current signer, and the action is still Queued.
     pub fn cancel(env: Env, signers: Vec<Address>, action_id: u64) -> Result<(), Error> {
         let config = begin(&env)?;
         let mut queued = load_live(&env, action_id)?;
@@ -275,7 +277,13 @@ impl Governor {
         }
 
         let by_proposer = distinct.len() == 1 && distinct.get_unchecked(0) == queued.proposer;
-        if !(by_proposer && queued.state == ActionState::Queued) {
+        if by_proposer && queued.state == ActionState::Queued {
+            // The proposer withdrawing its own action alone: only while
+            // it is still a current signer (D6).
+            if !config.signers.contains(&queued.proposer) {
+                return Err(Error::NotSigner);
+            }
+        } else {
             // Otherwise the threshold route: every listed address must be
             // a current signer, and they must reach the threshold. A
             // proposer acting alone on an Approved action is WrongState.
