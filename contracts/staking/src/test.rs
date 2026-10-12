@@ -26,6 +26,7 @@ extern crate std;
 mod aggregation_table;
 mod integration;
 mod property;
+mod ttl;
 
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{token, Address, BytesN, Env, Symbol};

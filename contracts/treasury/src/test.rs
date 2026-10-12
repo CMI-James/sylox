@@ -7,6 +7,7 @@
 extern crate std;
 
 mod property;
+mod ttl;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{token, Address, Env, Event as _};

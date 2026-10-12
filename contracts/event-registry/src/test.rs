@@ -6,6 +6,7 @@ extern crate std;
 mod integration;
 mod property;
 mod sub_epochs;
+mod ttl;
 
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Symbol};
