@@ -228,7 +228,7 @@ For the full picture, including architecture, state machine and call sequence di
 | `Treasury` | Implemented and tested; deployed to testnet |
 | `EventRegistry` | Implemented and tested (Depeg and IssuerFreeze, Tier 1); deployed to testnet |
 | `MarketFactory`, `Series` | Implemented and tested; not yet part of the testnet deployment |
-| `Governor` | Stub (`todo!()` bodies); the testnet admin key stands in for it |
+| `Governor` | Implemented and tested; not yet deployed. The testnet admin key stands in for it until the handover in [`docs/design/governor.md`](./docs/design/governor.md) Section 10 |
 | AMM price and FX adapters | Stubs |
 | `@sylox/sdk` (`packages/sdk`) | In use by the web app |
 | Web app (`web/app`) | Live on testnet: asset explorer, asset pages, events list, event page with Checkpoint and Finalize actions. Markets, positions and faucet screens are not built yet |
@@ -324,7 +324,7 @@ deploy/smoke-testnet.sh
 
 Current contract ids, Wasm hashes and identity public keys are in [`deployments/testnet.json`](./deployments/testnet.json), rewritten on every `deploy.sh testnet` run. No secret key ever appears in this repository; every identity's secret lives only in the local `stellar keys` store.
 
-Known gaps specific to this deployment: committee-gated functions (`rule`, `resolve_timeout`, signal dispute resolution) don't work until Governor exists ([#22](https://github.com/Sylox-labs/sylox/issues/22)); EventRegistry's `factory` argument is a placeholder until MarketFactory is deployed ([#23](https://github.com/Sylox-labs/sylox/issues/23)).
+Known gaps specific to this deployment: committee-gated functions (`rule`, `resolve_timeout`, signal dispute resolution) don't work until the Governor is deployed and the testnet contracts point at it ([#22](https://github.com/Sylox-labs/sylox/issues/22)); EventRegistry's `factory` argument is a placeholder until MarketFactory is deployed ([#23](https://github.com/Sylox-labs/sylox/issues/23)).
 
 ## Documentation map
 
