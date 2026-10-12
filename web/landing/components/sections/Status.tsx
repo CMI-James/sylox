@@ -78,7 +78,14 @@ export function Status() {
           <div data-reveal className="mt-12 md:mt-20">
             <div className="font-display text-7xl leading-none tracking-tight text-slate-black md:text-8xl">
               {doneCount}
-              <span className="text-cement-grey">/{status.items.length}</span>
+              {/* text-cement-grey here failed WCAG AA against this
+                  section's light (silo-oatmeal) background: 2.79:1 for a
+                  measured 72pt span, vs. a 3:1 minimum (axe color-contrast,
+                  "serious"). text-anchor-graphite is the lightest token in
+                  the design system that still passes here (11.49:1) — see
+                  the "cement-grey fails contrast on light backgrounds"
+                  flag in the PR description. */}
+              <span className="text-anchor-graphite">/{status.items.length}</span>
             </div>
             <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-anchor-graphite/70 md:text-xs">
               Steps shipped
@@ -98,7 +105,12 @@ export function Status() {
                   aria-hidden="true"
                   className={`h-2 w-2 shrink-0 translate-y-[-0.1em] rounded-full ${MARKER[state]}`}
                 />
-                <span className="w-6 shrink-0 font-mono text-xs text-cement-grey">
+                {/* text-cement-grey here failed WCAG AA against this
+                    section's light (silo-oatmeal) background: 2.79:1 for
+                    12px text, vs. a 4.5:1 minimum (axe color-contrast,
+                    "serious"). text-anchor-graphite is the lightest token
+                    that still passes here (11.49:1). */}
+                <span className="w-6 shrink-0 font-mono text-xs text-anchor-graphite">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <p className={`flex-1 text-base leading-snug md:text-lg ${LABEL[state]}`}>
