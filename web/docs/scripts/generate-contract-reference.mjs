@@ -242,10 +242,22 @@ function renderSdkErrorTable(entries) {
   return `| Code | Contract error name | Message shown to a caller |\n| --- | --- | --- |\n${rows}`;
 }
 
+// #### (depth 4), one level below the "### Types"/"### Functions"
+// subsection headers these sit under: a flat page with ~35 functions
+// per contract, each at the SAME depth as its own "### Functions"
+// parent, turned the sidebar TOC into a wall of same-weight entries
+// with no visible grouping (Fumadocs' TOC extraction walks every
+// heading depth with no default cutoff - see remark-heading.js).
+// app/docs/[[...slug]]/page.tsx filters the TOC to max depth 3, so
+// these individual entries never reach the sidebar at all; the real
+// section structure (## RiskOracle, ### Functions, ### Types, ###
+// Contract error codes) still does. The heading itself (and its own
+// anchor link) is unaffected - this only changes what level it's
+// written at, not whether it exists or is linkable.
 function renderTypes(types) {
   return types
     .map(({ name, kind, doc }) => {
-      const heading = `### \`${name}\``;
+      const heading = `#### \`${name}\``;
       const kindLine = kind === "interface" ? "Struct." : "Union/type alias.";
       const docBlock = doc ? `\n\n${mdxEscape(doc)}` : "";
       return `${heading}\n\n${kindLine}${docBlock}`;
@@ -256,7 +268,7 @@ function renderTypes(types) {
 function renderMethods(methods) {
   return methods
     .map(({ name, doc, signature }) => {
-      const heading = `### \`${name}\``;
+      const heading = `#### \`${name}\``;
       const docBlock = doc ? `\n\n${mdxEscape(doc)}` : "";
       return `${heading}\n\n\`\`\`ts\n${signature}\n\`\`\`${docBlock}`;
     })

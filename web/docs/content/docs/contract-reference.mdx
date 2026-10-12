@@ -47,13 +47,13 @@ code as a literal.
 
 ### Functions
 
-### `band`
+#### `band`
 
 ```ts
 band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<Band, Error>>>
 ```
 
-### `live`
+#### `live`
 
 ```ts
 live(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<[SubEpoch, SignalSet, SlotState] | null>>
@@ -69,7 +69,7 @@ app shows it as "Live" next to `latest()`/`score()`'s
 "Confirmed" values. Never used for `require_holding` or any
 other payout-adjacent valuation.
 
-### `ring`
+#### `ring`
 
 ```ts
 ring(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Array<RingSlot>>>
@@ -79,7 +79,7 @@ technical-doc.md Section 5.8, 12.1: one storage read, oldest slot
 first. See `storage::get_ring`'s doc comment for exactly what
 "oldest first" means once the buffer has wrapped.
 
-### `score`
+#### `score`
 
 ```ts
 score(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<RiskScore, Error>>>
@@ -104,19 +104,19 @@ while in progress" override is applied here instead, on every
 read, which also makes it take effect immediately on
 `set_event_in_progress` with no recompute required.
 
-### `assets`
+#### `assets`
 
 ```ts
 assets(options?: MethodOptions): Promise<AssembledTransaction<Array<string>>>
 ```
 
-### `latest`
+#### `latest`
 
 ```ts
 latest(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
 ```
 
-### `migrate`
+#### `migrate`
 
 ```ts
 migrate(options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -133,13 +133,13 @@ DOES change a stored type's shape migrates existing data here,
 gated the same way, with its own storage test (existing keys
 decode under the new types) alongside it.
 
-### `signals`
+#### `signals`
 
 ```ts
 signals(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
 ```
 
-### `upgrade`
+#### `upgrade`
 
 ```ts
 upgrade(args: { new_wasm_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -153,7 +153,7 @@ built yet (known gap, see deploy/README.md). This is the same
 direct, immediate governor-gated call every other call here
 already uses.
 
-### `version`
+#### `version`
 
 ```ts
 version(options?: MethodOptions): Promise<AssembledTransaction<number>>
@@ -164,7 +164,7 @@ hand alongside each `upgrade()` this contract ships (see deploy/
 README.md's upgrade procedure). Lets anyone confirm what is
 actually deployed without guessing from a wasm hash.
 
-### `is_final`
+#### `is_final`
 
 ```ts
 is_final(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
@@ -174,13 +174,13 @@ Review item C5: whether epoch `epoch` is EFFECTIVELY final right
 now: its stored state is `Final`, or it is `Pending` and
 `pending_until` has already passed. `false` for a missing epoch.
 
-### `is_stale`
+#### `is_stale`
 
 ```ts
 is_stale(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
 ```
 
-### `add_asset`
+#### `add_asset`
 
 ```ts
 add_asset(args: { cfg: AssetConfig }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -192,7 +192,7 @@ D3: also rejects `Reference::Asset` (no USD rate is defined
 anywhere in the spec for an asset pegged reference; see the PR's
 "Spec deviations").
 
-### `build_hour`
+#### `build_hour`
 
 ```ts
 build_hour(args: { asset: string | Address; hour: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -210,7 +210,7 @@ or Disputed; a never-posted hour (no sub-epoch at all, not even
 a missing one within an active interval) is equally not ready,
 since there is nothing to build from.
 
-### `check_stale`
+#### `check_stale`
 
 ```ts
 check_stale(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<boolean, Error>>>
@@ -234,7 +234,7 @@ call that touches an asset runs the same check internally (see
 arrival also emits, once, without needing anyone to call this
 explicitly; this function exists for a monitor tha
 
-### `first_epoch`
+#### `first_epoch`
 
 ```ts
 first_epoch(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
@@ -249,7 +249,7 @@ larger than any window length on a real network, so it alone
 can never tell a brand-new asset from one with years of
 history. `None` before the asset's first posting.
 
-### `set_formula`
+#### `set_formula`
 
 ```ts
 set_formula(args: { version: number; weights: Array<number>; params: Map<string, bigint> }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -258,13 +258,13 @@ set_formula(args: { version: number; weights: Array<number>; params: Map<string,
 technical-doc.md Section 12.1, 6.2. `set_formula` rejects any
 weight set that does not sum to 10,000.
 
-### `asset_config`
+#### `asset_config`
 
 ```ts
 asset_config(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<AssetConfig | null>>
 ```
 
-### `newest_epoch`
+#### `newest_epoch`
 
 ```ts
 newest_epoch(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
@@ -284,7 +284,7 @@ reading the former made every subsequent `slot_for_epoch` call
 miss, misclassifying every cure-window epoch as permanently
 missing.
 
-### `post_signals`
+#### `post_signals`
 
 ```ts
 post_signals(args: { keeper: string | Address; asset: string | Address; s: SignalSet }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -297,7 +297,7 @@ Section 11.3 sanity bounds, cross checks configured `PriceAdapter`s,
 and sources `endpoint` only from `Staking.aggregate` (never the
 keeper's payload). `s.endpoint` is only ever a placeholder on input.
 
-### `update_asset`
+#### `update_asset`
 
 ```ts
 update_asset(args: { asset: string | Address; cfg: AssetConfig }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -310,7 +310,7 @@ in the first place, since `add_asset` rejects it, but the check
 is repeated here rather than relying on that invariant holding
 forever).
 
-### `disable_asset`
+#### `disable_asset`
 
 ```ts
 disable_asset(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -318,7 +318,7 @@ disable_asset(args: { asset: string | Address }, options?: MethodOptions): Promi
 
 technical-doc.md Section 12.1.
 
-### `reference_rate`
+#### `reference_rate`
 
 ```ts
 reference_rate(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<bigint, Error>>>
@@ -330,7 +330,7 @@ reference's recorded basis and fails closed on a stale or missing
 rate; `Asset` has no USD rate defined anywhere in the spec, so this
 fails rather than guessing one (see the PR's "Spec deviations").
 
-### `set_event_band`
+#### `set_event_band`
 
 ```ts
 set_event_band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -341,7 +341,7 @@ contract itself (the `registry` address `RiskOracle` was
 initialized with), per Section 16.1's contract-to-contract auth
 pattern.
 
-### `sub_peg_ratios`
+#### `sub_peg_ratios`
 
 ```ts
 sub_peg_ratios(args: { asset: string | Address; hour: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Array<bigint | null>>>
@@ -360,7 +360,7 @@ waiting): every already-built hour inside its own trailing
 window is still read through `ring()` exactly as before this
 revision.
 
-### `dispute_signals`
+#### `dispute_signals`
 
 ```ts
 dispute_signals(args: { disputer: string | Address; asset: string | Address; epoch: bigint; alt_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -373,7 +373,7 @@ Only the signal dispute STATE lives here; the bond itself is held
 and later split by `Staking` on instruction from
 `resolve_signal_dispute`.
 
-### `clear_event_band`
+#### `clear_event_band`
 
 ```ts
 clear_event_band(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -381,7 +381,7 @@ clear_event_band(args: { asset: string | Address }, options?: MethodOptions): Pr
 
 technical-doc.md Section 12.1, 8.8.
 
-### `effective_window`
+#### `effective_window`
 
 ```ts
 effective_window(args: { asset: string | Address; start_epoch: bigint; count: number }, options?: MethodOptions): Promise<AssembledTransaction<Array<SlotState | null>>>
@@ -393,7 +393,7 @@ which epochs in a window are final without one call per epoch.
 Missing epochs read `None`, the same convention as `ring`'s
 underlying storage.
 
-### `median_liquidity`
+#### `median_liquidity`
 
 ```ts
 median_liquidity(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<bigint>>
@@ -405,7 +405,7 @@ the window are excluded, not treated as zero liquidity, so a short
 run of missing epochs does not crater the cap the way real zero
 liquidity would.
 
-### `post_sub_signals`
+#### `post_sub_signals`
 
 ```ts
 post_sub_signals(args: { keeper: string | Address; asset: string | Address; hour: bigint; sub: number; s: SignalSet }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -420,7 +420,7 @@ provisional roll-up on every call, and attempts the hour's
 build inline, the same way `post_signals` already
 inline-triggers the hourly finality scan.
 
-### `sub_epoch_config`
+#### `sub_epoch_config`
 
 ```ts
 sub_epoch_config(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<SubEpochConfig | null>>
@@ -430,7 +430,7 @@ technical-doc.md Section 5.9 S1 (v1.5): read-only, no auth. The
 asset's sub-epoch configuration, including a pending change not
 yet in effect.
 
-### `event_in_progress`
+#### `event_in_progress`
 
 ```ts
 event_in_progress(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
@@ -442,7 +442,7 @@ invariant E4 (its own active-event count agrees with this flag)
 directly, rather than inferring the flag only through its one
 visible effect on `band()`'s own Distress floor.
 
-### `finalize_endpoint`
+#### `finalize_endpoint`
 
 ```ts
 finalize_endpoint(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -454,7 +454,7 @@ books it into the epoch's ring slot and `Signals` entry if
 then calls `Staking.settle_probes` exactly once regardless, per
 Section 7.4's "booked exactly once" requirement.
 
-### `overturned_signals`
+#### `overturned_signals`
 
 ```ts
 overturned_signals(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<SignalSet | null>>
@@ -466,7 +466,7 @@ key, kept for audit. `None` if `epoch` was never overturned (or
 was overturned, reposted, and overturned again, which keeps only
 the most recent overturn, not a full history of every attempt).
 
-### `set_sub_epoch_secs`
+#### `set_sub_epoch_secs`
 
 ```ts
 set_sub_epoch_secs(args: { asset: string | Address; value: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -480,7 +480,7 @@ possibly-in-progress hour), so no sub-epoch already posted, or
 postable before that boundary, is ever reinterpreted under a
 different length.
 
-### `dispute_sub_signals`
+#### `dispute_sub_signals`
 
 ```ts
 dispute_sub_signals(args: { disputer: string | Address; asset: string | Address; hour: bigint; sub: number; alt_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -494,7 +494,7 @@ ring can keep rotating underneath a ruling that takes up to
 `SIGNAL_DISPUTE_RULING_SECS`), and the HOUR's own `Ring(asset)`
 slot moves to `Disputed` via `refresh_waiting_hour`.
 
-### `set_event_in_progress`
+#### `set_event_in_progress`
 
 ```ts
 set_event_in_progress(args: { asset: string | Address; in_progress: boolean }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -511,7 +511,7 @@ check this itself, matching the instruction that "the oracle
 never calls the registry" - this is pushed in, the same
 direction `set_event_band` already works.
 
-### `resolve_signal_dispute`
+#### `resolve_signal_dispute`
 
 ```ts
 resolve_signal_dispute(args: { asset: string | Address; epoch: bigint; keeper_wins: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -521,7 +521,7 @@ technical-doc.md Section 12.1, 5.4, 7.8. Auth: the committee
 address, read fresh from `Governor.committee()` on every call (the
 committee can rotate; `RiskOracle` never caches it).
 
-### `resolve_sub_signal_dispute`
+#### `resolve_sub_signal_dispute`
 
 ```ts
 resolve_sub_signal_dispute(args: { asset: string | Address; hour: bigint; sub: number; keeper_wins: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -540,7 +540,7 @@ move the hour out of `Disputed` (if no other sub-epoch in it is
 still disputed) and, if this was the last undecided sub-epoch,
 trigger the hour's build.
 
-### `resolve_sub_dispute_timeout`
+#### `resolve_sub_dispute_timeout`
 
 ```ts
 resolve_sub_dispute_timeout(args: { asset: string | Address; hour: bigint; sub: number }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -552,7 +552,7 @@ technical-doc.md Section 5.9 S2 (v1.5). Mirrors
 the same way for a sub-epoch dispute as for an hourly one, the
 keeper's posting stands.
 
-### `sub_peg_ratios_in_span_batch`
+#### `sub_peg_ratios_in_span_batch`
 
 ```ts
 sub_peg_ratios_in_span_batch(args: { asset: string | Address; hours: Array<bigint> }, options?: MethodOptions): Promise<AssembledTransaction<Array<Array<bigint | null>>>>
@@ -576,7 +576,7 @@ how many hours or sub-epochs are requested) rather than one key
 per hour: this is what makes the gate's own footprint constant
 regardless of how many hours are unbuilt (R10
 
-### `resolve_signal_dispute_timeout`
+#### `resolve_signal_dispute_timeout`
 
 ```ts
 resolve_signal_dispute_timeout(args: { asset: string | Address; epoch: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -602,115 +602,115 @@ the posting was wrong", not as a loss for either side.
 
 ### Types
 
-### `HourBuiltEvent`
+#### `HourBuiltEvent`
 
 Struct.
 
 technical-doc.md Section 5.9 S4, Section 13.
 
-### `AssetStaleEvent`
+#### `AssetStaleEvent`
 
 Struct.
 
 Event: AssetStale
 
-### `BandChangedEvent`
+#### `BandChangedEvent`
 
 Struct.
 
 Event: BandChanged
 
-### `ScoreUpdatedEvent`
+#### `ScoreUpdatedEvent`
 
 Struct.
 
 Event: ScoreUpdated
 
-### `SignalsFinalEvent`
+#### `SignalsFinalEvent`
 
 Struct.
 
 Event: SignalsFinal
 
-### `SignalsPostedEvent`
+#### `SignalsPostedEvent`
 
 Struct.
 
 Event: SignalsPosted
 
-### `SignalsDisputedEvent`
+#### `SignalsDisputedEvent`
 
 Struct.
 
 Event: SignalsDisputed
 
-### `SignalsResolvedEvent`
+#### `SignalsResolvedEvent`
 
 Struct.
 
 Event: SignalsResolved
 
-### `SubSignalsFinalEvent`
+#### `SubSignalsFinalEvent`
 
 Struct.
 
 Event: SubSignalsFinal
 
-### `SubSignalsPostedEvent`
+#### `SubSignalsPostedEvent`
 
 Struct.
 
 technical-doc.md Section 5.9 (v1.5), Section 13.
 
-### `EndpointFinalizedEvent`
+#### `EndpointFinalizedEvent`
 
 Struct.
 
 Event: EndpointFinalized
 
-### `SubSignalsDisputedEvent`
+#### `SubSignalsDisputedEvent`
 
 Struct.
 
 Event: SubSignalsDisputed
 
-### `SubSignalsResolvedEvent`
+#### `SubSignalsResolvedEvent`
 
 Struct.
 
 Event: SubSignalsResolved
 
-### `SubEpochSecsChangedEvent`
+#### `SubEpochSecsChangedEvent`
 
 Struct.
 
 technical-doc.md Section 5.9 S1, Section 13.
 
-### `SignalDisputeTimedOutEvent`
+#### `SignalDisputeTimedOutEvent`
 
 Struct.
 
 ADR-010 (feat/staking, issue #4 fix).
 
-### `SubSignalDisputeTimedOutEvent`
+#### `SubSignalDisputeTimedOutEvent`
 
 Struct.
 
 Event: SubSignalDisputeTimedOut
 
-### `Band`
+#### `Band`
 
 Union/type alias.
 
 Union: Band
 
-### `RiskScore`
+#### `RiskScore`
 
 Struct.
 
 The latest computed risk score for an asset. technical-doc.md Section 4.2.
 
-### `RingSlot`
+#### `RingSlot`
 
 Struct.
 
@@ -719,7 +719,7 @@ cover gate and the 24 hour and 7 day aggregates read in a single entry,
 instead of separate `Signals(asset, epoch)` entries.
 technical-doc.md Section 5.8, ADR-005.
 
-### `SubEpoch`
+#### `SubEpoch`
 
 Struct.
 
@@ -732,32 +732,32 @@ since what `sub` means depends on an interval that can later
 change; `SubEpoch` is the human-meaningful pair a keeper posts
 against, converted internally to `sub_start`.
 
-### `Reference`
+#### `Reference`
 
 Union/type alias.
 
 Union: Reference
 
-### `SignalSet`
+#### `SignalSet`
 
 Struct.
 
 One epoch's measured signals for one asset. technical-doc.md Section 4.1.
 
-### `SlotState`
+#### `SlotState`
 
 Union/type alias.
 
 Finality of one ring buffer slot. technical-doc.md Section 5.8.
 
-### `AssetConfig`
+#### `AssetConfig`
 
 Struct.
 
 Configuration for one issued asset covered by the RiskOracle.
 technical-doc.md Section 4.1.
 
-### `IssuerFlags`
+#### `IssuerFlags`
 
 Struct.
 
@@ -765,7 +765,7 @@ The classic issuer flags that make an issuer freeze possible. An
 IssuerFreeze definition can be registered only if at least one is set.
 technical-doc.md Section 4.1, ADR-006.
 
-### `FxRateSource`
+#### `FxRateSource`
 
 Union/type alias.
 
@@ -773,19 +773,19 @@ Which FX rate a `Reference::Fiat` is priced against. Matters wherever an
 official rate and a market (parallel) rate diverge, for example ARS.
 technical-doc.md Section 4.1, ADR-006.
 
-### `IssuerActions`
+#### `IssuerActions`
 
 Struct.
 
 Struct: IssuerActions
 
-### `EndpointStatus`
+#### `EndpointStatus`
 
 Union/type alias.
 
 Union: EndpointStatus
 
-### `SubEpochConfig`
+#### `SubEpochConfig`
 
 Struct.
 
@@ -798,7 +798,7 @@ never applies before `effective_from_hour`, so no sub-epoch
 already posted, or postable before that boundary, is ever
 reinterpreted under a different length.
 
-### `UpgradedEvent`
+#### `UpgradedEvent`
 
 Struct.
 
@@ -849,19 +849,19 @@ code as a literal.
 
 ### Functions
 
-### `rule`
+#### `rule`
 
 ```ts
 rule(args: { event_id: bigint; declare: boolean; reason: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
 ```
 
-### `event`
+#### `event`
 
 ```ts
 event(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<EventRecord | null>>
 ```
 
-### `covers`
+#### `covers`
 
 ```ts
 covers(args: { event_id: bigint; def_version: number; start: bigint; expiry: bigint }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
@@ -869,7 +869,7 @@ covers(args: { event_id: bigint; def_version: number; start: bigint; expiry: big
 
 technical-doc.md Section 8.6.
 
-### `migrate`
+#### `migrate`
 
 ```ts
 migrate(options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -886,7 +886,7 @@ DOES change a stored type's shape migrates existing data here,
 gated the same way, with its own storage test (existing keys
 decode under the new types) alongside it.
 
-### `upgrade`
+#### `upgrade`
 
 ```ts
 upgrade(args: { new_wasm_hash: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -898,7 +898,7 @@ months on mainnet, Section 17.3 also notes governance plans to
 remove `upgrade` from `EventRegistry` entirely (deploying v2
 alongside instead); not relevant yet on testnet.
 
-### `version`
+#### `version`
 
 ```ts
 version(options?: MethodOptions): Promise<AssembledTransaction<number>>
@@ -909,7 +909,7 @@ hand alongside each `upgrade()` this contract ships (see deploy/
 README.md's upgrade procedure). Lets anyone confirm what is
 actually deployed without guessing from a wasm hash.
 
-### `finalize`
+#### `finalize`
 
 ```ts
 finalize(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
@@ -919,13 +919,13 @@ technical-doc.md Section 8.1, as corrected by design review
 items D1 (cure window), D2/R2/R3 (three-way epoch state) and R1
 (cure strictness). See `docs/design/event-registry.md` Section 5.
 
-### `challenge`
+#### `challenge`
 
 ```ts
 challenge(args: { challenger: string | Address; event_id: bigint; evidence: Uint8Array }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
 ```
 
-### `cover_gate`
+#### `cover_gate`
 
 ```ts
 cover_gate(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<Result<CoverGate, Error>>>
@@ -939,31 +939,31 @@ fallback rule verbatim). WithdrawalHalt is out of scope for
 this build (no canonical definition of that kind can exist
 yet), so its own window always uses the Section 23 default.
 
-### `definition`
+#### `definition`
 
 ```ts
 definition(args: { asset: string | Address; kind: EventKind; version: number }, options?: MethodOptions): Promise<AssembledTransaction<EventDefinition | null>>
 ```
 
-### `in_progress`
+#### `in_progress`
 
 ```ts
 in_progress(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
 ```
 
-### `event_status`
+#### `event_status`
 
 ```ts
 event_status(args: { asset: string | Address; kind: EventKind }, options?: MethodOptions): Promise<AssembledTransaction<AssetEventStatus>>
 ```
 
-### `has_declared`
+#### `has_declared`
 
 ```ts
 has_declared(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>
 ```
 
-### `propose_tier1`
+#### `propose_tier1`
 
 ```ts
 propose_tier1(args: { caller: string | Address; asset: string | Address; kind: EventKind; version: number }, options?: MethodOptions): Promise<AssembledTransaction<Result<bigint, Error>>>
@@ -972,7 +972,7 @@ propose_tier1(args: { caller: string | Address; asset: string | Address; kind: E
 technical-doc.md Section 8.2, as amended by this build's lead
 decision (design note Section 2) and design review item D3.
 
-### `checkpoint_cure`
+#### `checkpoint_cure`
 
 ```ts
 checkpoint_cure(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<CureProgress, Error>>>
@@ -988,37 +988,37 @@ itself the successful outcome; there being more to record later
 is not a failure. Calling it twice in a row is a no-op the
 second time (`record_cure_progress`'s own recorded-bit check).
 
-### `current_version`
+#### `current_version`
 
 ```ts
 current_version(args: { asset: string | Address; kind: EventKind }, options?: MethodOptions): Promise<AssembledTransaction<number>>
 ```
 
-### `resolve_timeout`
+#### `resolve_timeout`
 
 ```ts
 resolve_timeout(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<Result<null, Error>>>
 ```
 
-### `ruling_deadline`
+#### `ruling_deadline`
 
 ```ts
 ruling_deadline(args: { event_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<bigint | null>>
 ```
 
-### `committee_misses`
+#### `committee_misses`
 
 ```ts
 committee_misses(args: { committee: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<number>>
 ```
 
-### `active_event_count`
+#### `active_event_count`
 
 ```ts
 active_event_count(args: { asset: string | Address }, options?: MethodOptions): Promise<AssembledTransaction<number>>
 ```
 
-### `register_definition`
+#### `register_definition`
 
 ```ts
 register_definition(args: { def: EventDefinition }, options?: MethodOptions): Promise<AssembledTransaction<Result<number, Error>>>
@@ -1030,55 +1030,55 @@ always the previous canonical version plus one, starting at 1.
 
 ### Types
 
-### `EventCuredEvent`
+#### `EventCuredEvent`
 
 Struct.
 
 Event: EventCured
 
-### `EventDeclaredEvent`
+#### `EventDeclaredEvent`
 
 Struct.
 
 Event: EventDeclared
 
-### `EventProposedEvent`
+#### `EventProposedEvent`
 
 Struct.
 
 Event: EventProposed
 
-### `EventRejectedEvent`
+#### `EventRejectedEvent`
 
 Struct.
 
 Event: EventRejected
 
-### `EventEscalatedEvent`
+#### `EventEscalatedEvent`
 
 Struct.
 
 Event: EventEscalated
 
-### `RulingTimedOutEvent`
+#### `RulingTimedOutEvent`
 
 Struct.
 
 Event: RulingTimedOut
 
-### `EventChallengedEvent`
+#### `EventChallengedEvent`
 
 Struct.
 
 Event: EventChallenged
 
-### `DefinitionRegisteredEvent`
+#### `DefinitionRegisteredEvent`
 
 Struct.
 
 Event: DefinitionRegistered
 
-### `CureProgress`
+#### `CureProgress`
 
 Struct.
 
@@ -1095,13 +1095,13 @@ PermanentlyMissing is a statement about elapsed time, which never
 un-elapses), so recording is monotonic and `checkpoint_cure` is
 naturally idempotent.
 
-### `Reference`
+#### `Reference`
 
 Union/type alias.
 
 Union: Reference
 
-### `FxRateSource`
+#### `FxRateSource`
 
 Union/type alias.
 
@@ -1109,33 +1109,33 @@ Which FX rate a `Reference::Fiat` is priced against. Matters wherever an
 official rate and a market (parallel) rate diverge, for example ARS.
 technical-doc.md Section 4.1, ADR-006.
 
-### `CoverGate`
+#### `CoverGate`
 
 Union/type alias.
 
 Result of `EventRegistry::cover_gate(asset)`: whether new cover may be
 bought on an asset right now (ADR-003). technical-doc.md Section 9.4.
 
-### `EventKind`
+#### `EventKind`
 
 Union/type alias.
 
 Union: EventKind
 
-### `EventState`
+#### `EventState`
 
 Union/type alias.
 
 Union: EventState
 
-### `EventRecord`
+#### `EventRecord`
 
 Struct.
 
 One proposed credit event, keyed by `(asset, kind, def_version)`
 (ADR-001). technical-doc.md Section 4.3.
 
-### `EventDefinition`
+#### `EventDefinition`
 
 Struct.
 
@@ -1147,7 +1147,7 @@ technical-doc.md Section 4.3.
 Parameters that do not apply to `kind` must be zero; `register_definition`
 rejects a definition that sets them.
 
-### `AssetEventStatus`
+#### `AssetEventStatus`
 
 Union/type alias.
 
@@ -1155,7 +1155,7 @@ Returned by `EventRegistry::event_status(asset, kind)`, which is per
 `(asset, kind)` for the canonical version (ADR-001).
 technical-doc.md Section 12.2.
 
-### `UpgradedEvent`
+#### `UpgradedEvent`
 
 Struct.
 
