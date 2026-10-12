@@ -1,3 +1,6 @@
+<img width="2000" height="705" alt="sylox-lockup-horizontal-mono-oatmeal" src="https://github.com/user-attachments/assets/f942d26b-1746-4ed5-8658-9e4db0398595" />
+
+
 # Sylox Protocol
 
 **A public risk score for every anchor-issued token on Stellar, and a market where holders can buy protection against that issuer depegging, freezing funds, halting withdrawals, or failing.**
