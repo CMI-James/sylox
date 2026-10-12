@@ -17,3 +17,25 @@ if (typeof window !== "undefined" && !window.matchMedia) {
     dispatchEvent: () => false,
   });
 }
+
+// jsdom doesn't implement IntersectionObserver either; useInViewport
+// (ProblemStatement's video pause/play, and anything else that mounts it)
+// constructs one directly in an effect, so any test that renders such a
+// component needs this stubbed globally. Never reports an intersection
+// (isIntersecting stays false via the default state) — tests that need to
+// simulate scrolling into view trigger that through the component's own
+// props/state instead of this stub.
+if (typeof window !== "undefined" && !("IntersectionObserver" in window)) {
+  class MockIntersectionObserver implements IntersectionObserver {
+    readonly root: Element | Document | null = null;
+    readonly rootMargin: string = "";
+    readonly thresholds: ReadonlyArray<number> = [];
+    observe = () => {};
+    unobserve = () => {};
+    disconnect = () => {};
+    takeRecords = (): IntersectionObserverEntry[] => [];
+  }
+
+  (globalThis as { IntersectionObserver: typeof IntersectionObserver }).IntersectionObserver =
+    MockIntersectionObserver;
+}

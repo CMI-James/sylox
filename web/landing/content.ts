@@ -65,15 +65,18 @@ export const problem = {
   eyebrow: "+ THE PROBLEM",
   heading:
     "Same name. Same currency. Very different odds of getting your money back.",
-  // The component only has two paragraph slots (bodyLeft, bodyRight); the
-  // brief's copy is five short beats. Grouped 1-2 into bodyLeft (setup) and
-  // 3-5 into bodyRight (consequence + resolution), exact words and sentence
-  // order preserved, only the paragraph break point chosen. Flagged in the
-  // PR as a judgment call, not a reword.
-  bodyLeft:
-    "On Stellar, several companies can issue a token for the same currency. Two dollar tokens can sit side by side in your wallet looking identical, and be backed by completely different reserves, banks and track records.",
-  bodyRight:
-    "Wallets list them as equals. Lenders accept them as equals. Holders find out they weren't the day a withdrawal doesn't come back. Sylox makes the difference visible before that day, and gives you a way to be covered when it comes.",
+  // The brief's copy is five short beats. The previous commit (678bf33)
+  // grouped them into ProblemStatement.tsx's two fixed paragraph slots
+  // (bodyLeft, bodyRight) as a stopgap; this follow-up gives the component
+  // a `paragraphs: string[]` list instead, so all five render as separate
+  // paragraphs, word for word, no regrouping.
+  paragraphs: [
+    "On Stellar, several companies can issue a token for the same currency.",
+    "Two dollar tokens can sit side by side in your wallet looking identical, and be backed by completely different reserves, banks and track records.",
+    "Wallets list them as equals. Lenders accept them as equals.",
+    "Holders find out they weren't the day a withdrawal doesn't come back.",
+    "Sylox makes the difference visible before that day, and gives you a way to be covered when it comes.",
+  ],
   _source: "landing/copy-and-docs-links brief, The problem section",
 };
 
