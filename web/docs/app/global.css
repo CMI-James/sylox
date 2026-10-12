@@ -102,3 +102,52 @@ body {
   outline: 2px solid var(--color-focus-ring, var(--color-risk-crimson));
   outline-offset: 2px;
 }
+
+/* A heading that legitimately contains inline code (e.g. "Reading
+   risk: `al.oracle`") renders that code span inside its own TOC entry
+   too - Fumadocs' remark-heading plugin flattens a heading's full
+   rendered content into the TOC's title text, code tags included, not
+   just plain text (confirmed directly in the rendered HTML: a TOC
+   link's own `.prose` class wraps a real `<code>` element). Tailwind
+   Typography's default `code` styling (background, border, padding,
+   rounded corners) reads fine inline in the page body, but in the
+   narrow TOC column - especially a heading with two or three code
+   spans next to prose - it renders as a stack of bordered badges
+   crowding the link text. Scoped to #nd-toc/[data-toc-popover] only:
+   every other `code` on the page (the page body, callouts, the
+   generated contract reference) keeps the normal badge styling. */
+#nd-toc code,
+[data-toc-popover] code {
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  font-weight: inherit;
+  color: inherit;
+}
+
+/* The desktop sidebar's own grid area spans TWO columns, not one:
+   Fumadocs' docs-layout grid template is
+   "sidebar sidebar header toc toc" - the repeated "sidebar" token
+   merges a flexible `minmax(min-content, 1fr)` centering gutter
+   together with the real, fixed `--fd-sidebar-width` (268px) column
+   into one shared area (confirmed directly: at a 3420px viewport,
+   that gutter alone computed to 934px, nearly 4x the sidebar's own
+   real width). The sidebar `<aside>` itself (#nd-sidebar) is `w-full`
+   with its real content right-aligned inside via `items-end` -
+   correct on an ordinary screen, where the gutter is 0 or small, but
+   on any screen wider than Fumadocs' own `--fd-layout-width` default
+   (97rem / 1552px - a real, common case on a large or ultrawide
+   monitor), the aside's own `bg-fd-card` background (a visibly
+   different shade from the page's own `bg-fd-background`, by this
+   app's own design tokens) fills that entire oversized area, reading
+   as a large dead zone of "sidebar-colored" space to the left of the
+   actual nav rather than plain page margin. Capping the aside's own
+   max-width to the real sidebar width stops its background (and
+   everything painted on it) from ever extending past the content it
+   actually holds - the centering gutter outside that is then plain
+   page background, same as the equivalent gutter already reads
+   correctly on the TOC's own side. */
+#nd-sidebar {
+  max-width: var(--fd-sidebar-width);
+}
