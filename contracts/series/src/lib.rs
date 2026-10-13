@@ -281,11 +281,15 @@ impl Series {
 
     // -- buyer side (Section 9.4, 9.5) --
 
+    /// Takes the buyer's signed `max_premium`, charges the real premium
+    /// and refunds the difference in the same call; `PremiumAboveMax`
+    /// if the real premium is higher. Returns `(filled, premium)`.
     pub fn buy_cover(
         env: Env,
         buyer: Address,
         amount: i128,
         max_rate_bps: u32,
+        max_premium: i128,
     ) -> Result<(i128, i128), Error> {
         buyer.require_auth();
         if Self::sync_internal(&env) != SeriesState::Open {
@@ -344,15 +348,23 @@ impl Series {
         if filled == 0 {
             return Err(Error::NoFill);
         }
+        if premium_total > max_premium {
+            return Err(Error::PremiumAboveMax);
+        }
 
         factory.reserve_cover(&env.current_contract_address(), &filled);
         storage::add_total_reserved(&env, filled);
 
-        token::TokenClient::new(&env, &terms.settlement).transfer(
-            &buyer,
-            env.current_contract_address(),
-            &premium_total,
-        );
+        // The buyer signs a fixed `max_premium`, not the live premium,
+        // which falls every second as `time_remaining` shrinks: a
+        // simulated amount would no longer match the signed transfer
+        // once the transaction lands a few seconds later (Section 9.4).
+        let usdc = token::TokenClient::new(&env, &terms.settlement);
+        usdc.transfer(&buyer, env.current_contract_address(), &max_premium);
+        let refund = max_premium - premium_total;
+        if refund > 0 {
+            usdc.transfer(&env.current_contract_address(), &buyer, &refund);
+        }
         sylox_types::treasury_deposit::deposit_treasury_share(
             &env,
             &terms.settlement,

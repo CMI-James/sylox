@@ -1400,7 +1400,7 @@ stateDiagram-v2
 
 ### 9.4 Buying cover
 
-`buy_cover(buyer, amount, max_rate_bps) -> (filled, premium_paid)`:
+`buy_cover(buyer, amount, max_rate_bps, max_premium) -> (filled, premium_paid)`:
 
 1. `buyer.require_auth()`; `sync_state()`; series must be Open.
 2. Reject if any of these holds (this blocks informed buying, ADR-003):
@@ -1425,10 +1425,12 @@ stateDiagram-v2
    ```
 
    `balance` is read from the asset's SAC, `peg_ratio` is the latest posted value, and `fx_rate` is the reference to USD rate from `RiskOracle.reference_rate(asset)`: `SCALE` for a `Usd` reference, `FxAdapter.rate(code, rate_source)` for a `Fiat` reference. A stale rate fails closed. All factors are fixed point with `SCALE`, rounded down. `open_series` rejects `require_holding` for an asset with an `Asset` reference in v1 (Section 9.7), so that case never reaches this step.
-7. Walk quotes from cheapest; skip any with `rate_bps > max_rate_bps`; fill until `amount` or quotes run out. For each fill, compute the premium (Section 10), add `fill` to the seller's `cover_written` and the premium net of fee to `premium_earned`.
+7. Walk quotes from cheapest; skip any with `rate_bps > max_rate_bps`; fill until `amount` or quotes run out. For each fill, compute the premium (Section 10), add `fill` to the seller's `cover_written` and the premium net of fee to `premium_earned`. Reject (`PremiumAboveMax`) if the total premium is above `max_premium`.
 8. Call `MarketFactory.reserve_cover(series, filled)`. The factory checks `open_cover(asset) + filled <= cover_cap(asset)` and reserves in the same call, or fails with `CoverCapExceeded` and the whole purchase reverts. There is no separate read of the cap, so there is no window between checking and reserving.
-9. Transfer total premium from buyer to the series (USDC); pay the fee part into the `Treasury` with `Treasury.deposit(series, Fees, fee)`; mint `filled` cover units to the buyer.
+9. Transfer `max_premium` from buyer to the series (USDC) and, in the same call, refund `max_premium` minus the total premium to the buyer; pay the fee part into the `Treasury` with `Treasury.deposit(series, Fees, fee)`; mint `filled` cover units to the buyer. The fee, each seller's `premium_earned`, `total_premium` and `cover_bought` all use the real premium, never `max_premium`.
 10. Emit `cover_bought`. Partial fills are allowed; the caller sees `filled < amount`.
+
+Why `max_premium`: the premium depends on `time_remaining` (Section 10.1), so it falls every second. The buyer's signature covers the exact amount of the nested USDC transfer, and a transaction simulated at one timestamp lands at a later one, so signing the live premium would fail authorization on almost every purchase. The buyer instead signs a fixed `max_premium`, typically `premium_quote(amount, max_rate_bps)` at signing time; time alone only lowers the premium, so a later execution charges the same or less and refunds the rest. A premium above `max_premium` (a cheaper quote cancelled in between, say) rejects the purchase instead of charging more.
 
 Call sequence for the steps above, using the two seller example from Section 10.5 (Seller A quotes 400 bps, Seller B quotes 300 bps; buyer walks the book cheapest first):
 
@@ -1443,7 +1445,7 @@ sequenceDiagram
   participant USDC as USDC SAC
   participant Treasury
 
-  Buyer->>Series: buy_cover(amount, max_rate_bps)
+  Buyer->>Series: buy_cover(amount, max_rate_bps, max_premium)
   Series->>Series: require_auth(buyer), sync_state(), check state == Open
   Series->>Oracle: is_stale(asset), band(asset)
   Series->>Registry: cover_gate(asset)
@@ -1469,12 +1471,14 @@ sequenceDiagram
   Series->>Series: walk quotes cheapest first (step 7)
   Note over Series: fills 50,000 from Seller B @ 300 bps, then 30,000 from Seller A @ 400 bps
   Series->>Series: compute premium per fill (10.1), credit each seller's premium_earned net of fee
+  Series->>Series: reject (PremiumAboveMax) if total premium > max_premium (step 7)
 
   Series->>Factory: reserve_cover(series, filled)
   Factory->>Factory: check open_cover + filled <= cover_cap and reserve, one call (step 8)
   Factory-->>Series: ok, or CoverCapExceeded and the whole call reverts
 
-  Buyer->>USDC: transfer total premium to Series
+  Buyer->>USDC: transfer max_premium to Series
+  Series->>USDC: refund max_premium minus total premium to Buyer
   Series->>Treasury: deposit(series, Fees, fee)
   Treasury->>USDC: transfer fee from Series to Treasury
   Series->>Series: mint filled cover units to buyer (step 9)
@@ -1786,7 +1790,7 @@ fn withdraw(env, seller: Address, amount: i128) -> i128;  // auth: seller
 fn transfer_position(env, from: Address, to: Address);    // auth: from; rejects if `to` already holds a position (RecipientHasPosition)
 
 // buyer side
-fn buy_cover(env, buyer: Address, amount: i128, max_rate_bps: u32) -> (i128, i128); // auth: buyer
+fn buy_cover(env, buyer: Address, amount: i128, max_rate_bps: u32, max_premium: i128) -> (i128, i128); // auth: buyer; takes max_premium, refunds the rest
 fn claim(env, holder: Address, amount: i128) -> i128;     // auth: holder
 fn claim_for(env, holder: Address) -> i128;               // anyone, after claim window
 
@@ -1997,6 +2001,7 @@ Each contract defines a `#[contracterror]` enum with `u32` codes in its own rang
 | 514 | `RecentFailureSignals` | Series | Cover gate failed: recent below threshold epoch, endpoint outage, or issuer action |
 | 515 | `RecipientHasPosition` | Series | `transfer_position` to an address that already holds a position |
 | 516 | `FastSignalPause` (v1.5) | Series | `buy_cover` rejected: the asset's `PriceGuard` reports `Paused` or `Unavailable` (Section 5.9, S5; `feat/markets` M2). Sales only; never blocks a claim or a trigger |
+| 518 | `PremiumAboveMax` | Series | `buy_cover`: the premium at execution is above the buyer's signed `max_premium` (Section 9.4) |
 | 600 | `NotSigner` | Governor | Not a multisig signer |
 | 601 | `TimelockActive` | Governor | Execute before ETA |
 | 602 | `ThresholdNotMet` | Governor | Not enough approvals |
