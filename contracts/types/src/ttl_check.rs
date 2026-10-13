@@ -31,6 +31,7 @@ use crate::ttl::{HISTORY_TTL_EXTEND_TO, INSTANCE_TTL_EXTEND_TO, PERSISTENT_TTL_E
 pub const HISTORY_VARIANTS: &[&str] = &[
     "Signals",
     "HourPostedVia",
+    "HourSubEpochSecs",
     "SubSignals",
     "Overturned",
     "SubOverturned",

@@ -195,6 +195,11 @@ pub enum DataKey {
     /// after `Sub(asset)`'s own 60 slot ring has rotated the hour's
     /// sub-epochs out.
     HourPostedVia(Address, u64),
+    /// Section 5.9 S1: the `sub_epoch_secs` an hour's sub-epochs were
+    /// posted at, recorded by its first sub-epoch post. A new key rather
+    /// than a field on an existing entry, so every entry the live
+    /// contract already holds still decodes after an upgrade.
+    HourSubEpochSecs(Address, u64),
 }
 
 /// Section 5.9 S2: which path posted an hour, for the one-writer-per-hour
@@ -1772,6 +1777,16 @@ pub fn get_hour_posted_via(env: &Env, asset: &Address, hour: u64) -> Option<Hour
 
 pub fn set_hour_posted_via(env: &Env, asset: &Address, hour: u64, via: HourPostedVia) {
     sylox_types::ttl::set_history(env, &DataKey::HourPostedVia(asset.clone(), hour), &via);
+}
+
+pub fn get_hour_sub_epoch_secs(env: &Env, asset: &Address, hour: u64) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::HourSubEpochSecs(asset.clone(), hour))
+}
+
+pub fn set_hour_sub_epoch_secs(env: &Env, asset: &Address, hour: u64, secs: u64) {
+    sylox_types::ttl::set_history(env, &DataKey::HourSubEpochSecs(asset.clone(), hour), &secs);
 }
 
 /// Test only: flips the stored layout version so the next read is

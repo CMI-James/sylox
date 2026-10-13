@@ -208,7 +208,7 @@ Tests it needs:
 | D1 | Option A? | **Approved.** `HeldHour` takes precedence once an hour is held, with no fallback to the ring. |
 | D2 | Reject rulings after the deadline? | **Yes**, for both `resolve_signal_dispute` and `resolve_sub_signal_dispute`, with a new error (`RulingDeadlinePassed`, 118). After the deadline only the timeout exists. In the implementation PR, not a separate one. The worst case is recomputed in Section 5.1: about 13.25 days. |
 | D3 | `HeldHour` outlives the last dispute? | **Yes, by one day** (Section 5.3). |
-| D4 | What happens when neither a ruling nor a timeout lands before the dispute record expires? | **Traced in Section 7.1.** No contract fix: nothing is lost or misread, and the permissionless timeout closes the dispute whenever it is called. One `deploy/README.md` line in the implementation PR. |
+| D4 | What happens when neither a ruling nor a timeout lands before the dispute record expires? | **Traced in Section 7.1.** No contract fix and no longer lifetimes: nothing is lost or misread, and the permissionless timeout closes the dispute whenever it is called. The keeper service calls every due timeout (`resolve_signal_dispute_timeout` and `resolve_sub_dispute_timeout`) each epoch, alongside `checkpoint_cure` (issue #20). One `deploy/README.md` line in the implementation PR. |
 | D5 | Where do the spec changes go? | **In the implementation PR.** |
 
 ### 7.1 Trace for D4: a dispute nobody closes in time

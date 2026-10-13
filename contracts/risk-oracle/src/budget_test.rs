@@ -759,3 +759,105 @@ fn budget_build_hour_worst_case_300s_12_subs_with_a_backfill() {
         resources.write_entries
     );
 }
+
+/// #92 (docs/design/held-repost-disputes.md): a full 12 sub-epoch hour
+/// whose sub 0 is overturned near its 6-day deadline and reposted past
+/// the ring span, so the repost lives only in `HeldHour`. Measures the
+/// repost's dispute, then its resolution: a keeper-wins ruling, or the
+/// timeout at the last ledger of its `SubDispute`. Both resolutions
+/// build the hour.
+fn budget_held_repost_flow(timeout: bool) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let staking = env.register(MockStaking, ());
+    let governor = env.register(crate::mocks::MockGovernor, ());
+    let client = RiskOracleClient::new(
+        &env,
+        &env.register(
+            RiskOracle,
+            (governor.clone(), Address::generate(&env), staking),
+        ),
+    );
+    let asset = Address::generate(&env);
+    client.add_asset(&asset_config(&env, &asset, &Address::generate(&env)));
+    let committee = Address::generate(&env);
+    let at = |t: u64| {
+        env.ledger().set_timestamp(t);
+        env.ledger().set_sequence_number((t / 5) as u32);
+        crate::mocks::MockGovernorClient::new(&env, &governor).set_committee(&committee);
+    };
+    let hash = |b: u8| BytesN::from_array(&env, &[b; 32]);
+
+    let hour = 497_000u64;
+    let keeper = Address::generate(&env);
+    for sub in 0..12u32 {
+        at(hour * 3_600 + (sub as u64 + 1) * 300);
+        let peg = if sub == 0 { 1 } else { 9_900_000 };
+        client.post_sub_signals(
+            &keeper,
+            &asset,
+            &hour,
+            &sub,
+            &sub_signal_set(&env, hour, peg),
+        );
+    }
+    let disputer = Address::generate(&env);
+    let d1 = (hour + 1) * 3_600;
+    at(d1);
+    client.dispute_sub_signals(&disputer, &asset, &hour, &0u32, &hash(1));
+    let o1 = d1 + crate::SIGNAL_DISPUTE_RULING_SECS - 60;
+    at(o1);
+    client.resolve_sub_signal_dispute(&asset, &hour, &0u32, &false, &hash(2));
+    let repost = o1 + 7_200 - 60;
+    at(repost);
+    client.post_sub_signals(
+        &keeper,
+        &asset,
+        &hour,
+        &0u32,
+        &sub_signal_set(&env, hour, 9_900_000),
+    );
+
+    let d2 = repost + 60;
+    at(d2);
+    client.dispute_sub_signals(&disputer, &asset, &hour, &0u32, &hash(3));
+    if !timeout {
+        print_resources(
+            "dispute_sub_signals, a held repost, full 12 sub-epoch hour",
+            &env.cost_estimate(),
+        );
+    }
+
+    if timeout {
+        at(d2 + (crate::SUB_DISPUTE_TTL_LEDGERS as u64) * 5 - 5);
+        client.resolve_sub_dispute_timeout(&asset, &hour, &0u32);
+        print_resources(
+            "resolve_sub_dispute_timeout, a held repost at the last ledger of its SubDispute (builds)",
+            &env.cost_estimate(),
+        );
+    } else {
+        at(d2 + crate::SIGNAL_DISPUTE_RULING_SECS - 60);
+        client.resolve_sub_signal_dispute(&asset, &hour, &0u32, &true, &hash(4));
+        print_resources(
+            "resolve_sub_signal_dispute, keeper wins on a held repost (builds)",
+            &env.cost_estimate(),
+        );
+    }
+    assert!(client.is_final(&asset, &hour));
+    let resources = env.cost_estimate().resources();
+    assert!(
+        (resources.instructions as u64) < TX_MAX_INSTRUCTIONS / 2,
+        "must stay under 50% of tx_max_instructions ({TX_MAX_INSTRUCTIONS}); got {}",
+        resources.instructions
+    );
+}
+
+#[test]
+fn budget_held_repost_dispute_and_keeper_wins() {
+    budget_held_repost_flow(false);
+}
+
+#[test]
+fn budget_held_repost_late_timeout() {
+    budget_held_repost_flow(true);
+}
