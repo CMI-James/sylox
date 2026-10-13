@@ -2001,6 +2001,7 @@ Each contract defines a `#[contracterror]` enum with `u32` codes in its own rang
 | 514 | `RecentFailureSignals` | Series | Cover gate failed: recent below threshold epoch, endpoint outage, or issuer action |
 | 515 | `RecipientHasPosition` | Series | `transfer_position` to an address that already holds a position |
 | 516 | `FastSignalPause` (v1.5) | Series | `buy_cover` rejected: the asset's `PriceGuard` reports `Paused` or `Unavailable` (Section 5.9, S5; `feat/markets` M2). Sales only; never blocks a claim or a trigger |
+| 517 | `FeedBehind` (v1.5) | Series | `buy_cover` rejected: the asset's newest posted sub-epoch is older than the last closed one, outside `feed_grace_secs` (Section 9.4 step 3; `feat/markets` M1) |
 | 518 | `PremiumAboveMax` | Series | `buy_cover`: the premium at execution is above the buyer's signed `max_premium` (Section 9.4) |
 | 600 | `NotSigner` | Governor | Not a multisig signer |
 | 601 | `TimelockActive` | Governor | Execute before ETA |
