@@ -396,6 +396,10 @@ literal `0`) - audited every other `jq` lookup in `extend-ttl.sh` for
 the same `select(...) // default` shape at the same time; this was the
 only one.
 
+## Dispute timeouts
+
+A signal dispute nobody closes before its ruling deadline stays open, with its bonds locked and its hour unbuilt, until someone calls `RiskOracle.resolve_signal_dispute_timeout` or `resolve_sub_dispute_timeout`; both are permissionless, the keeper service calls every due one each epoch alongside `checkpoint_cure` (issue #20), and a call made after the dispute record's TTL restores the archived records at the caller's cost (`docs/design/held-repost-disputes.md` D4).
+
 ## Upgrading a contract (issue #12)
 
 Every core contract (`RiskOracle`, `EventRegistry`, `Treasury`,

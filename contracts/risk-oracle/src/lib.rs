@@ -162,6 +162,12 @@ const SECONDS_PER_LEDGER: u64 = 5;
 const SUB_DISPUTE_TTL_MARGIN_SECS: u64 = 86_400;
 const SUB_DISPUTE_TTL_LEDGERS: u32 =
     ((SIGNAL_DISPUTE_RULING_SECS + SUB_DISPUTE_TTL_MARGIN_SECS) / SECONDS_PER_LEDGER) as u32;
+/// docs/design/held-repost-disputes.md D3: `HeldHour(asset, hour)`
+/// outlives the hour's last open `SubDispute` by one day. Every dispute
+/// in the hour writes its own `HeldHour` entry, so a timeout at the last
+/// ledger of a `SubDispute` still finds the held hour live and can build
+/// it in the same call.
+const HELD_HOUR_TTL_LEDGERS: u32 = SUB_DISPUTE_TTL_LEDGERS + (86_400 / SECONDS_PER_LEDGER) as u32;
 
 #[contract]
 pub struct RiskOracle;
@@ -513,7 +519,7 @@ impl RiskOracle {
                 hour,
                 sub,
                 &held_slot,
-                SUB_DISPUTE_TTL_LEDGERS,
+                HELD_HOUR_TTL_LEDGERS,
             );
         } else {
             let wrote = storage::write_sub_slot_entry(
@@ -548,7 +554,7 @@ impl RiskOracle {
                     hour,
                     sub,
                     &held_slot,
-                    SUB_DISPUTE_TTL_LEDGERS,
+                    HELD_HOUR_TTL_LEDGERS,
                 );
             }
         }
@@ -656,7 +662,30 @@ impl RiskOracle {
 
         let sub_epoch_secs = current_sub_epoch_secs(&env, &asset, hour);
         let sub_start = sub_start_of(hour, sub, sub_epoch_secs);
-        let slot = storage::get_sub_slot(&env, &asset, sub_start).ok_or(Error::WrongEpoch)?;
+        // docs/design/held-repost-disputes.md D1: once an hour is held,
+        // `HeldHour` is its only source of truth, the same precedence
+        // `sub_disposition` uses, with no fallback to the ring. A repost
+        // made after the ring span lives only there and stays
+        // disputable within its own `pending_until`.
+        let slot = match storage::get_held_hour(&env, &asset, hour) {
+            Some(held) => {
+                let h = held.get(sub).ok_or(Error::WrongEpoch)?;
+                storage::SubRingSlot {
+                    sub_start,
+                    state: h.state,
+                    pending_until: h.pending_until,
+                    peg_ratio: h.peg_ratio,
+                    liquidity_2pct: h.liquidity_2pct,
+                    redemption_net: h.redemption_net,
+                    supply: h.supply,
+                    supply_change_bps: 0,
+                    clawback_amount: h.clawback_amount,
+                    auth_revocations: h.auth_revocations,
+                    endpoint: sylox_types::EndpointStatus::Unknown,
+                }
+            }
+            None => storage::get_sub_slot(&env, &asset, sub_start).ok_or(Error::WrongEpoch)?,
+        };
         if slot.state != sylox_types::SlotState::Pending {
             return Err(Error::DisputeWindowClosed);
         }
@@ -739,7 +768,7 @@ impl RiskOracle {
                 clawback_amount: slot.clawback_amount,
                 auth_revocations: slot.auth_revocations,
             },
-            SUB_DISPUTE_TTL_LEDGERS,
+            HELD_HOUR_TTL_LEDGERS,
         );
 
         events::SubSignalsDisputed {
@@ -774,6 +803,11 @@ impl RiskOracle {
 
         let dispute =
             storage::get_dispute(&env, &asset, epoch).ok_or(Error::DisputeWindowClosed)?;
+        // D2: a ruling closes at the same instant the timeout opens, so
+        // exactly one of the two can end the dispute at any moment.
+        if env.ledger().timestamp() >= dispute.opened_at + SIGNAL_DISPUTE_RULING_SECS {
+            return Err(Error::RulingDeadlinePassed);
+        }
         let signals = storage::get_signals(&env, &asset, epoch).ok_or(Error::WrongEpoch)?;
         let staking = StakingClient::new(&env, &config.staking);
         let bond_key = sylox_types::BondKey::SignalDispute(asset.clone(), epoch);
@@ -872,6 +906,10 @@ impl RiskOracle {
         let dispute =
             storage::get_sub_dispute(&env, &asset, hour, sub).ok_or(Error::DisputeWindowClosed)?;
         let now = env.ledger().timestamp();
+        // D2: see resolve_signal_dispute.
+        if now >= dispute.opened_at + SIGNAL_DISPUTE_RULING_SECS {
+            return Err(Error::RulingDeadlinePassed);
+        }
         let sub_epoch_secs = current_sub_epoch_secs(&env, &asset, hour);
         let sub_start = sub_start_of(hour, sub, sub_epoch_secs);
         let signals = storage::get_sub_signals(&env, &asset, hour, sub).ok_or(Error::WrongEpoch)?;
@@ -2139,7 +2177,7 @@ fn ensure_hour_held(env: &Env, asset: &Address, hour: u64, sub_epoch_secs: u64) 
                     clawback_amount: slot.clawback_amount,
                     auth_revocations: slot.auth_revocations,
                 },
-                SUB_DISPUTE_TTL_LEDGERS,
+                HELD_HOUR_TTL_LEDGERS,
             );
         }
     }

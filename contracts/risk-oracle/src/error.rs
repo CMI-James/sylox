@@ -75,4 +75,9 @@ pub enum Error {
     /// would make hours from before the previous one resolve to the
     /// wrong length while something can still read them.
     SubEpochChangeTooSoon = 117,
+    /// docs/design/held-repost-disputes.md D2: `resolve_signal_dispute`
+    /// or `resolve_sub_signal_dispute` called at or after
+    /// `opened_at + SIGNAL_DISPUTE_RULING_SECS`. From that instant only
+    /// the timeout can close the dispute.
+    RulingDeadlinePassed = 118,
 }
