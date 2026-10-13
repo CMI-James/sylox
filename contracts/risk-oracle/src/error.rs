@@ -69,4 +69,10 @@ pub enum Error {
     /// most once; a second call for the same (or an earlier) version is
     /// a no-op request, not a retry of something that failed.
     AlreadyMigrated = 116,
+    /// technical-doc.md Section 5.9 S1: `set_sub_epoch_secs` called
+    /// fewer than 240 hours (10 days) after the previous change took
+    /// effect. `SubEpochConfig` stores one transition, so a newer change
+    /// would make hours from before the previous one resolve to the
+    /// wrong length while something can still read them.
+    SubEpochChangeTooSoon = 117,
 }

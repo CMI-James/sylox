@@ -61,6 +61,10 @@ pub const CHALLENGE_SECS_MAX_EPOCHS: u64 = MAX_CURE_EPOCHS;
 /// rotation, never spans more wall-clock time.
 pub const SUB_RING_SLOTS: u32 = 60;
 
+/// One hourly epoch, in seconds: the length every `sub_epoch_secs`
+/// divides evenly. technical-doc.md Section 5.1, 5.9 S1.
+pub const EPOCH_SECS: u64 = 3_600;
+
 /// The fixed wall-clock grid `Sub(asset)`'s ring position is anchored
 /// to, in seconds: the 5 minute `sub_epoch_secs` floor. technical-doc.md
 /// Section 5.9 S3. Every allowed `sub_epoch_secs` value is a multiple
