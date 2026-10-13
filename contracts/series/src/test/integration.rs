@@ -312,7 +312,12 @@ fn day_88_depeg_full_lifecycle_against_real_contracts() {
 
     let buy_amount = 5_000 * 10_000_000i128; // 5,000 USDC, well under cover_cap
     fx.usdc_admin_client.mint(&buyer, &buy_amount);
-    let (filled, premium_total) = series.buy_cover(&buyer, &buy_amount, &500u32);
+    let (filled, premium_total) = series.buy_cover(
+        &buyer,
+        &buy_amount,
+        &500u32,
+        &series.premium_quote(&buy_amount, &500u32).1,
+    );
     assert_eq!(
         filled, buy_amount,
         "the buyer's single seller must fill it in full"
