@@ -114,10 +114,12 @@ const SUPPLY_CHANGE_TOLERANCE_BPS: i128 = 1;
 const SUB_EPOCH_SECS_DEFAULT: u64 = 300;
 
 /// Section 5.9 S1: the least time, in hours, between a
-/// `sub_epoch_secs` change taking effect and the next change. 240 hours
-/// (10 days) is the ring's own span (`storage::RING_SLOTS` hourly
-/// slots) and the history lifetime (`HISTORY_TTL_EXTEND_TO`), so no
-/// hour from before the previous change is still read once it passes.
+/// `sub_epoch_secs` change taking effect and the next change: 240 hours
+/// (10 days), the ring's own span (`storage::RING_SLOTS` hourly slots).
+/// It only limits how often the length changes. What keeps an old hour
+/// correct is the per-hour record (`HourSubEpochSecs`), since an unbuilt
+/// hour can be built at any age; the spacing keeps the config resolver
+/// exact for every recent hour, which the gate relies on.
 const SUB_EPOCH_CHANGE_SPACING_HOURS: u64 = storage::RING_SLOTS as u64;
 
 /// Section 5.9 S1: the only values `set_sub_epoch_secs` accepts, each
@@ -477,6 +479,12 @@ impl RiskOracle {
             == Some(storage::HourPostedVia::HourlyFallback)
         {
             return Err(Error::HourAlreadyPosted);
+        }
+        // Section 5.9 S1: the hour's first sub-epoch post records the
+        // length it is posted at, so every later reader resolves this
+        // hour the same way at any age.
+        if storage::get_hour_sub_epoch_secs(&env, &asset, hour).is_none() {
+            storage::set_hour_sub_epoch_secs(&env, &asset, hour, sub_epoch_secs);
         }
         storage::set_hour_posted_via(&env, &asset, hour, storage::HourPostedVia::SubEpoch);
 
@@ -1263,15 +1271,17 @@ impl RiskOracle {
     /// postable before that boundary, is ever reinterpreted under a
     /// different length.
     ///
-    /// `SubEpochConfig` stores one transition, so a change made after
-    /// the previous one took effect drops the length that governed the
-    /// hours before it: those hours then resolve to the previous
-    /// change's length. That is safe only once nothing reads them any
-    /// more, so a new change is rejected (`SubEpochChangeTooSoon`) until
+    /// A new change is rejected (`SubEpochChangeTooSoon`) until
     /// `SUB_EPOCH_CHANGE_SPACING_HOURS` (240 hours, 10 days) after the
-    /// previous `effective_from_hour`: the ring's own span and the
-    /// history lifetime (`HISTORY_TTL_EXTEND_TO`). A change still
-    /// pending (its hour not yet arrived) may be replaced at any time.
+    /// previous `effective_from_hour`; a change still pending (its hour
+    /// not yet arrived) may be replaced at any time. The spacing only
+    /// limits how often the length changes. `SubEpochConfig` stores one
+    /// transition, so after a change the config alone resolves hours
+    /// from before the previous one to the wrong length; every hour with
+    /// a sub-epoch posted is resolved from its own record
+    /// (`HourSubEpochSecs`) instead, which keeps it correct at any age.
+    /// Within the spacing, the config resolver stays exact for recent
+    /// hours, which is all the gate's batched read needs.
     pub fn set_sub_epoch_secs(env: Env, asset: Address, value: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
@@ -1453,7 +1463,13 @@ impl RiskOracle {
         let packed = storage::get_sub_ring_packed_for_batch(&env, &asset);
         let mut out = Vec::new(&env);
         for hour in hours.iter() {
-            let sub_epoch_secs = current_sub_epoch_secs(&env, &asset, hour);
+            // The config resolver, not the per-hour record: reading
+            // `HourSubEpochSecs` here would add one ledger key per hour
+            // scanned and break the gate's fixed footprint (Section
+            // 15.3). It is exact for every hour this reads, since only
+            // hours inside `Sub(asset)`'s 5 hour span carry sub-epoch data
+            // here, far less than the 240 hours between changes.
+            let sub_epoch_secs = config_sub_epoch_secs(&env, &asset, hour);
             let per_hour = sub_epochs_per_hour(sub_epoch_secs);
             let mut ratios = Vec::new(&env);
             for sub in 0..per_hour {
@@ -1855,7 +1871,23 @@ fn sub_peg_ratios_for_one_hour(env: &Env, asset: &Address, hour: u64) -> Vec<Opt
 /// its own doc comment for why an asset that never opts in simply
 /// never sees a sub-epoch post at all, keeping I22 satisfied by
 /// construction).
+///
+/// An hour that has had a sub-epoch posted resolves to the length it was
+/// posted at (`HourSubEpochSecs`, recorded by its first post), whatever
+/// the config says now: an unbuilt hour can be built at any age, so the
+/// config alone is not enough once a later change has been promoted over
+/// it. Any other hour resolves through the config.
 fn current_sub_epoch_secs(env: &Env, asset: &Address, hour: u64) -> u64 {
+    storage::get_hour_sub_epoch_secs(env, asset, hour)
+        .unwrap_or_else(|| config_sub_epoch_secs(env, asset, hour))
+}
+
+/// The length the config puts in force for `hour`: the pending value
+/// from `effective_from_hour` on, the current value before it. Exact
+/// for any hour less than 240 hours older than the previous change
+/// (`SUB_EPOCH_CHANGE_SPACING_HOURS`), which covers every hour still
+/// inside `Sub(asset)`'s 5 hour span.
+fn config_sub_epoch_secs(env: &Env, asset: &Address, hour: u64) -> u64 {
     match storage::get_sub_epoch_config(env, asset) {
         Some(cfg) => match (cfg.pending_sub_epoch_secs, cfg.effective_from_hour) {
             (Some(pending), Some(effective_from_hour)) if hour >= effective_from_hour => pending,

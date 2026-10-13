@@ -71,9 +71,9 @@ pub enum Error {
     AlreadyMigrated = 116,
     /// technical-doc.md Section 5.9 S1: `set_sub_epoch_secs` called
     /// fewer than 240 hours (10 days) after the previous change took
-    /// effect. `SubEpochConfig` stores one transition, so a newer change
-    /// would make hours from before the previous one resolve to the
-    /// wrong length while something can still read them.
+    /// effect. It only limits how often the length changes; each hour is
+    /// resolved from the length recorded at its first post
+    /// (`HourSubEpochSecs`), which is what keeps old hours correct.
     SubEpochChangeTooSoon = 117,
     /// docs/design/held-repost-disputes.md D2: `resolve_signal_dispute`
     /// or `resolve_sub_signal_dispute` called at or after

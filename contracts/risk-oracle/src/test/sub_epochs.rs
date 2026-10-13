@@ -306,6 +306,53 @@ fn replacing_a_still_pending_change_works() {
     assert_eq!(fx.client.sub_epoch_secs_at(&asset, &(hour + 1)), 1_800);
 }
 
+/// Section 5.9 S1: an hour is resolved with the length it was posted at,
+/// at any age. Hour H is posted at 300 while a change to 900 is pending
+/// for H + 1, left unbuilt, and a second change (to 600) lands 293 hours
+/// later, promoting 900 over the config's history. Building H then must
+/// still use 300 and roll up all 12 of its sub-epochs; resolved through
+/// the config alone it would read H at 900 and roll up only 4.
+#[test]
+fn an_old_unbuilt_hour_builds_with_the_length_it_was_posted_at() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let keeper = Address::generate(&env);
+    let hour = REALISTIC_EPOCH_BASE;
+
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
+    fx.client.set_sub_epoch_secs(&asset, &900);
+    let mut sum: i128 = 0;
+    for sub in 0..12u32 {
+        let peg = 9_000_000 + sub as i128 * 10_000;
+        sum += peg;
+        post_sub(&env, &fx.client, &keeper, &asset, hour, sub, 300, peg);
+    }
+    assert!(!fx.client.is_final(&asset, &hour), "left unbuilt");
+
+    env.ledger()
+        .set_timestamp(hour * EPOCH_SECS + 293 * EPOCH_SECS);
+    fx.client.set_sub_epoch_secs(&asset, &600);
+    let cfg = fx.client.sub_epoch_config(&asset).unwrap();
+    assert_eq!(
+        cfg.sub_epoch_secs, 900,
+        "900 promoted over the original 300"
+    );
+    assert_eq!(
+        fx.client.sub_epoch_secs_at(&asset, &hour),
+        300,
+        "recorded at its first post"
+    );
+
+    fx.client.build_hour(&asset, &hour);
+    assert!(fx.client.is_final(&asset, &hour));
+    let built = fx.client.signals(&asset, &hour).unwrap();
+    assert_eq!(
+        built.peg_ratio,
+        sum / 12,
+        "every one of the 12 sub-epochs rolled up"
+    );
+}
+
 /// S2: an hour is posted through exactly one path; a sub-epoch post
 /// against an hour already posted through the hourly fallback is
 /// rejected, and the reverse.
