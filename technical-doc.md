@@ -857,6 +857,7 @@ Everything above this section is unchanged: the hour, the 240 slot ring, the 72 
 - Allowed values: 300, 600, 900, 1,200, 1,800, 3,600 seconds (5 to 60 minutes), each dividing 3,600 evenly. Default 300. Below 300 is a build constant, not a governance floor: going lower needs a new build, deliberately, so `Sub(asset)`'s own ring stays small (S3) and a single keeper is capped at 288 posts per asset per day at the default (Section 23).
 - A change takes effect from the next hour boundary only: store `(sub_epoch_secs, effective_from_hour)` and expose a read of the pending value, so no sub-epoch already posted, or postable before that boundary, is ever reinterpreted under a different length.
 - The next change keeps the length actually in force as the current value: a pending value whose hour has arrived is promoted into `sub_epoch_secs` on that write, and a value still pending is replaced. `sub_epoch_secs_at(asset, hour)` (Section 12.1) reads the length in force for any hour.
+- `SubEpochConfig` stores one transition, so after a change takes effect the next change is rejected (`SubEpochChangeTooSoon`) until 240 hours (10 days) after its `effective_from_hour`: the ring's own span and the history lifetime (Section 15.2). Past that, nothing still reads an hour from before the previous change, so the hours it overwrites can safely resolve to the previous change's length. A change still pending (its hour not yet arrived) may be replaced at any time.
 - `sub_epoch_secs = 3,600` means exactly one sub-epoch per hour, numbered `sub = 0`: today's behavior, unchanged, reachable at any time by setting the parameter back.
 
 **S2. Posting and disputes**
@@ -1945,6 +1946,7 @@ Each contract defines a `#[contracterror]` enum with `u32` codes in its own rang
 | 113 | `InvalidSubEpochInterval` (v1.5) | RiskOracle | `sub_epoch_secs` set to a value outside {300, 600, 900, 1,200, 1,800, 3,600}, or one that does not divide 3,600 evenly (Section 5.9, S1) |
 | 114 | `SubEpochNotReady` (v1.5) | RiskOracle | An hour-build was requested while at least one of its sub-epochs is still Pending or Disputed, i.e. not yet Final, permanently missing, or rejected (Section 5.9, S4) |
 | 115 | `HourAlreadyPosted` (v1.5) | RiskOracle | A sub-epoch post against an hour already posted through the hourly fallback path, or an hourly fallback post against an hour that already has a sub-epoch posted (Section 5.9, S2) |
+| 117 | `SubEpochChangeTooSoon` | RiskOracle | `set_sub_epoch_secs` called fewer than 240 hours after the previous change took effect; a change still pending may be replaced (Section 5.9, S1) |
 | 200 | `UnknownDefinition` | EventRegistry | No canonical definition for (asset, kind), or no such version |
 | 201 | `EventInProgress` | EventRegistry | Another event is open for this (asset, kind) |
 | 202 | `Tier1CheckFailed` | EventRegistry | Ring buffer data does not meet the definition, including too many missing epochs or a low baseline liquidity |

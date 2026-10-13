@@ -113,6 +113,13 @@ const SUPPLY_CHANGE_TOLERANCE_BPS: i128 = 1;
 /// as an implicit `SubEpochConfig` default (see `current_sub_epoch_secs`).
 const SUB_EPOCH_SECS_DEFAULT: u64 = 300;
 
+/// Section 5.9 S1: the least time, in hours, between a
+/// `sub_epoch_secs` change taking effect and the next change. 240 hours
+/// (10 days) is the ring's own span (`storage::RING_SLOTS` hourly
+/// slots) and the history lifetime (`HISTORY_TTL_EXTEND_TO`), so no
+/// hour from before the previous change is still read once it passes.
+const SUB_EPOCH_CHANGE_SPACING_HOURS: u64 = storage::RING_SLOTS as u64;
+
 /// Section 5.9 S1: the only values `set_sub_epoch_secs` accepts, each
 /// dividing `EPOCH_SECS` (3,600) evenly.
 const SUB_EPOCH_SECS_ALLOWED: [u64; 6] = [300, 600, 900, 1_200, 1_800, 3_600];
@@ -1217,6 +1224,16 @@ impl RiskOracle {
     /// possibly-in-progress hour), so no sub-epoch already posted, or
     /// postable before that boundary, is ever reinterpreted under a
     /// different length.
+    ///
+    /// `SubEpochConfig` stores one transition, so a change made after
+    /// the previous one took effect drops the length that governed the
+    /// hours before it: those hours then resolve to the previous
+    /// change's length. That is safe only once nothing reads them any
+    /// more, so a new change is rejected (`SubEpochChangeTooSoon`) until
+    /// `SUB_EPOCH_CHANGE_SPACING_HOURS` (240 hours, 10 days) after the
+    /// previous `effective_from_hour`: the ring's own span and the
+    /// history lifetime (`HISTORY_TTL_EXTEND_TO`). A change still
+    /// pending (its hour not yet arrived) may be replaced at any time.
     pub fn set_sub_epoch_secs(env: Env, asset: Address, value: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
@@ -1229,6 +1246,14 @@ impl RiskOracle {
         let now = env.ledger().timestamp();
         let current_hour = now / EPOCH_SECS;
         let effective_from_hour = current_hour + 1;
+        if let Some(previous) =
+            storage::get_sub_epoch_config(&env, &asset).and_then(|c| c.effective_from_hour)
+        {
+            if current_hour >= previous && current_hour < previous + SUB_EPOCH_CHANGE_SPACING_HOURS
+            {
+                return Err(Error::SubEpochChangeTooSoon);
+            }
+        }
 
         // The interval actually in force for the current hour carries
         // forward as `sub_epoch_secs`: an earlier pending value whose

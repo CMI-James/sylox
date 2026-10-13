@@ -176,17 +176,44 @@ fn sub_epoch_config_and_sub_epoch_secs_at_agree() {
 
     env.ledger().set_timestamp((hour + 2) * EPOCH_SECS + 60);
     check("600 in force");
+    env.ledger()
+        .set_timestamp((hour + 1 + 240) * EPOCH_SECS + 60);
     fx.client.set_sub_epoch_secs(&asset, &900);
     check("900 pending after 600 took effect");
 }
 
-/// A second `set_sub_epoch_secs` after the first took effect keeps the
-/// value actually in force as current: the first change's pending value
-/// is promoted, and the hour the second change is made in keeps it.
-/// Before the fix the config fell back to the original 300, so the
-/// current hour switched back to 300 mid-hour.
+/// A second change 239 hours after the first took effect is rejected:
+/// hours from before the first change could still be read, and the one
+/// stored transition can't describe both.
 #[test]
-fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
+fn a_second_change_239_hours_after_the_first_takes_effect_is_rejected() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let hour = REALISTIC_EPOCH_BASE;
+
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
+    fx.client.set_sub_epoch_secs(&asset, &600);
+    let took_effect = hour + 1;
+
+    env.ledger()
+        .set_timestamp((took_effect + 239) * EPOCH_SECS + 3_599);
+    assert_eq!(
+        fx.client.try_set_sub_epoch_secs(&asset, &900),
+        Err(Ok(crate::Error::SubEpochChangeTooSoon))
+    );
+    let cfg = fx.client.sub_epoch_config(&asset).unwrap();
+    assert_eq!(cfg.pending_sub_epoch_secs, Some(600), "config unchanged");
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &hour), 300);
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &took_effect), 600);
+}
+
+/// At 240 hours the second change is accepted. The length in force is
+/// promoted to current, the hour of the change and those after the first
+/// change keep 600, the next hour gets 900, and the hours before the
+/// first change resolve to 600 only now that they are over 240 hours
+/// old (before the second change they still resolved to 300).
+#[test]
+fn at_240_hours_a_second_change_is_accepted_and_old_hours_resolve_correctly() {
     let env = Env::default();
     let (fx, asset) = setup_with_asset(&env);
     let keeper = Address::generate(&env);
@@ -194,9 +221,10 @@ fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
 
     env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
     fx.client.set_sub_epoch_secs(&asset, &600);
+    let took_effect = hour + 1;
+    let second_hour = took_effect + 240;
 
-    // Two hours later 600 is in force; post sub 0 of that hour at 600.
-    let second_hour = hour + 2;
+    // Sub 0 of the second change's hour, at 600, before the change.
     post_sub(
         &env,
         &fx.client,
@@ -207,6 +235,7 @@ fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
         600,
         10_000_000,
     );
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &hour), 300);
     fx.client.set_sub_epoch_secs(&asset, &900);
 
     let cfg = fx.client.sub_epoch_config(&asset).unwrap();
@@ -216,8 +245,14 @@ fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
     );
     assert_eq!(cfg.pending_sub_epoch_secs, Some(900));
     assert_eq!(cfg.effective_from_hour, Some(second_hour + 1));
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &took_effect), 600);
     assert_eq!(fx.client.sub_epoch_secs_at(&asset, &second_hour), 600);
     assert_eq!(fx.client.sub_epoch_secs_at(&asset, &(second_hour + 1)), 900);
+    assert!(
+        second_hour - hour > 240,
+        "the pre-change hour is over 240 hours old"
+    );
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &hour), 600);
 
     // The rest of the current hour is still addressed at 600: sub 1
     // covers [600, 1200), and `live` reads it back as sub 1.
@@ -247,17 +282,28 @@ fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
     );
     let (live, _, _) = fx.client.live(&asset).unwrap();
     assert_eq!((live.hour, live.sub), (second_hour + 1, 3));
+}
 
-    // Two changes inside the same hour: the second replaces the first,
-    // and the value in force for the current hour is unchanged.
-    env.ledger()
-        .set_timestamp((second_hour + 1) * EPOCH_SECS + 3_000);
-    fx.client.set_sub_epoch_secs(&asset, &1_200);
+/// A change still pending may be replaced, in the same hour, as often
+/// as needed; the length in force for the current hour is untouched.
+#[test]
+fn replacing_a_still_pending_change_works() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let hour = REALISTIC_EPOCH_BASE;
+
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
+    fx.client.set_sub_epoch_secs(&asset, &600);
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 3_000);
+    fx.client.set_sub_epoch_secs(&asset, &900);
     fx.client.set_sub_epoch_secs(&asset, &1_800);
+
     let cfg = fx.client.sub_epoch_config(&asset).unwrap();
-    assert_eq!(cfg.sub_epoch_secs, 900);
+    assert_eq!(cfg.sub_epoch_secs, 300);
     assert_eq!(cfg.pending_sub_epoch_secs, Some(1_800));
-    assert_eq!(cfg.effective_from_hour, Some(second_hour + 2));
+    assert_eq!(cfg.effective_from_hour, Some(hour + 1));
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &hour), 300);
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &(hour + 1)), 1_800);
 }
 
 /// S2: an hour is posted through exactly one path; a sub-epoch post

@@ -669,33 +669,43 @@ fn the_hour_boundary_itself_uses_each_side_s_own_length() {
     );
 }
 
-/// Two changes in a row: 300 to 600, then, two hours later while 600 is
-/// in force, 600 to 900. The hour of the second change keeps 600 and the
-/// next one uses 900, and a sale passes the feed check in each.
+/// Two changes in a row: 300 to 600, then, once 600 has been in force
+/// for 240 hours (the least spacing `set_sub_epoch_secs` allows), 600 to
+/// 900. The hour of the second change keeps 600 and the next one uses
+/// 900, and a sale passes the feed check in each.
 #[test]
 fn two_length_changes_in_a_row_still_pass_the_feed_check() {
     let env = Env::default();
     let m = FeedMarket::new(&env);
     let h = m.hour;
-    // Hourly posts for the first two hours keep the asset fresh; the
-    // sub-epoch posts below start in the third.
-    post_run(&env, &m.fx.oracle, &m.keeper, &m.asset, h, 2, 9_900_000);
     m.change_length(h * EPOCH_SECS + 60, 600);
-    m.change_length((h + 2) * EPOCH_SECS + 60, 900);
+    // Hourly posts through the 240 hours keep the asset fresh; the
+    // sub-epoch posts below start in the hour of the second change.
+    let second = h + 1 + 240;
+    post_run(
+        &env,
+        &m.fx.oracle,
+        &m.keeper,
+        &m.asset,
+        h,
+        second - h,
+        9_900_000,
+    );
+    m.change_length(second * EPOCH_SECS + 60, 900);
     let cfg = m.fx.oracle.sub_epoch_config(&m.asset).unwrap();
     assert_eq!(cfg.sub_epoch_secs, 600);
     assert_eq!(cfg.pending_sub_epoch_secs, Some(900));
 
-    m.post_sub(h + 2, 1, 600);
+    m.post_sub(second, 1, 600);
     assert_eq!(
-        m.buy_at((h + 2) * EPOCH_SECS + 1_200 + 150),
+        m.buy_at(second * EPOCH_SECS + 1_200 + 150),
         None,
         "600 still in force for the hour of the second change"
     );
-    m.post_sub(h + 2, 5, 600);
-    m.post_sub(h + 3, 0, 900);
+    m.post_sub(second, 5, 600);
+    m.post_sub(second + 1, 0, 900);
     assert_eq!(
-        m.buy_at((h + 3) * EPOCH_SECS + 900 + 150),
+        m.buy_at((second + 1) * EPOCH_SECS + 900 + 150),
         None,
         "900 in force from the next hour"
     );
