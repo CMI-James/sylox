@@ -155,6 +155,7 @@ impl EventRegistry {
         factory: Address,
         usdc: Address,
     ) {
+        sylox_types::ttl::extend_instance(&env);
         storage::set_config(
             &env,
             &Config {
@@ -182,6 +183,7 @@ impl EventRegistry {
     /// alongside instead); not relevant yet on testnet.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         sylox_types::upgrade::do_upgrade(&env, &config.governor, CONTRACT_VERSION, new_wasm_hash);
         Ok(())
     }
@@ -198,6 +200,7 @@ impl EventRegistry {
     /// decode under the new types) alongside it.
     pub fn migrate(env: Env) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         if !sylox_types::upgrade::do_migrate(
             &env,
             &config.governor,
@@ -221,6 +224,7 @@ impl EventRegistry {
     pub fn set_factory(env: Env, factory: Address) -> Result<(), Error> {
         let mut config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         if env.storage().instance().has(&FACTORY_SET_KEY) {
             return Err(Error::FactoryAlreadySet);
         }
@@ -236,6 +240,7 @@ impl EventRegistry {
     pub fn register_definition(env: Env, def: EventDefinition) -> Result<u32, Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
 
         let asset_config = RiskOracleClient::new(&env, &config.oracle)
             .asset_config(&def.asset)
@@ -309,6 +314,7 @@ impl EventRegistry {
         // will display. Without this, anyone could propose in someone
         // else's name.
         caller.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let config = Self::require_config(&env)?;
         let def = storage::get_def(&env, &asset, kind, version).ok_or(Error::UnknownDefinition)?;
 
@@ -388,6 +394,7 @@ impl EventRegistry {
         evidence: BytesN<32>,
     ) -> Result<(), Error> {
         challenger.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let config = Self::require_config(&env)?;
         let mut record = storage::get_event(&env, event_id).ok_or(Error::UnknownEvent)?;
         if record.state != EventState::Proposed {
@@ -435,6 +442,7 @@ impl EventRegistry {
     /// (cure strictness). See `docs/design/event-registry.md` Section 5.
     pub fn finalize(env: Env, event_id: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let mut record = storage::get_event(&env, event_id).ok_or(Error::UnknownEvent)?;
         if record.state != EventState::Proposed {
             return Err(Error::WrongState);
@@ -486,6 +494,7 @@ impl EventRegistry {
     /// second time (`record_cure_progress`'s own recorded-bit check).
     pub fn checkpoint_cure(env: Env, event_id: u64) -> Result<storage::CureProgress, Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let record = storage::get_event(&env, event_id).ok_or(Error::UnknownEvent)?;
         if record.state != EventState::Proposed {
             return Err(Error::WrongState);
@@ -506,6 +515,7 @@ impl EventRegistry {
         let config = Self::require_config(&env)?;
         let committee = GovernorClient::new(&env, &config.governor).committee();
         committee.require_auth();
+        sylox_types::ttl::extend_instance(&env);
 
         let mut record = storage::get_event(&env, event_id).ok_or(Error::UnknownEvent)?;
         if record.state != EventState::Escalated {
@@ -543,6 +553,7 @@ impl EventRegistry {
 
     pub fn resolve_timeout(env: Env, event_id: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let mut record = storage::get_event(&env, event_id).ok_or(Error::UnknownEvent)?;
         if record.state != EventState::Escalated {
             return Err(Error::WrongState);

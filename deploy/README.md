@@ -287,17 +287,23 @@ time.
 
 ## `deploy/extend-ttl.sh`: a TTL stopgap for issue #28
 
-**This is a stopgap, not the real fix.** None of RiskOracle,
-EventRegistry, Treasury or Staking ever call `extend_ttl` on their own
-current-state storage, so every persistent/instance entry they write
-quietly ages toward expiry with nothing refreshing it. Measuring every
-tracked entry's `liveUntilLedgerSeq` (issue #28) showed the earliest
-expiring about 6 days out, too soon to wait for the real fix (extend
-TTL on write, per #28's own policy) to ship through `upgrade()`
-(#12). **Remove this script and its call site in
-`deploy/post-demo-signals.sh` once `upgrade()` ships that fix** - this
-script's whole job disappears the moment the contracts extend their
-own TTL on write.
+**This is a stopgap, not the real fix.** The RiskOracle,
+EventRegistry, Treasury and Staking contracts live on testnet never
+call `extend_ttl` on their own current-state storage, so every
+persistent/instance entry they write quietly ages toward expiry with
+nothing refreshing it. Measuring every tracked entry's
+`liveUntilLedgerSeq` (issue #28) showed the earliest expiring about 6
+days out.
+
+**The real fix is now in the contract code, but not yet on testnet.**
+As of `fix/ttl-policy`, every state-changing call extends the
+contract's instance TTL and every persistent write extends that entry,
+with the shared `sylox_types::ttl` constants. The live contracts only
+get this once each one is upgraded to that code through `upgrade()`
+(#12). **The cron stays until then: keep this script and its call site
+in `deploy/post-demo-signals.sh` until every live contract runs code
+with the fix, and remove both only after that upgrade.** Its job
+disappears once the live contracts extend their own TTL on write.
 
 `deploy/extend-ttl.sh testnet` runs at the end of every
 `post-demo-signals.sh testnet --live` pass (every 5 minutes), after
@@ -316,12 +322,18 @@ enumerating every epoch or hour ever posted would make this script's
 own cost grow forever, instead of staying flat. A history key ages out
 on its own and is individually restorable later if something rare (a
 dispute, an audit) ever needs it again; that is an acceptable cost
-here, not a live-read outage. The margin backing that call is thin: a
-fresh history entry starts with about 7 days of TTL, and the longest a
-live call needs one is the 2h dispute window plus the 6 day ruling
-window (`SIGNAL_DISPUTE_RULING_SECS` = 518,400s) - about 22 hours of
-slack. This script does not widen that margin; only the real fix
-(extend on write, through `upgrade()`) can make it unnecessary.
+here, not a live-read outage. On the live contracts the margin
+backing that call is thin: a fresh history entry starts with about 7
+days of TTL, and the longest a live call needs one is the 2h dispute
+window plus the 6 day ruling window (`SIGNAL_DISPUTE_RULING_SECS` =
+518,400s) - about 22 hours of slack. The contract code now removes it:
+every write-once history key (`Signals`, `HourPostedVia`, `SubSignals`,
+`Overturned`, `SubOverturned`, `SubRepostUsed`) is extended to 10 days
+on write, almost 4 days of slack, and an overturn re-extends the other
+`SubSignals` of its hour (technical-doc.md Section 15.2). The live
+contracts get that
+through `upgrade()`; this script does not widen the margin, and stays
+until then.
 
 **Token balances: every one of our own contracts x every token, never
 a classic account's.** A SAC's `Balance(Address)` key is a real

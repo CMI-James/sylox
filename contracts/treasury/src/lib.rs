@@ -79,6 +79,7 @@ impl Treasury {
     /// address here is computed in advance from a deterministic salt,
     /// deploy/deploy.sh's own "Constructor flow" section).
     pub fn __constructor(env: Env, governor: Address, staking: Address, usdc: Address) {
+        sylox_types::ttl::extend_instance(&env);
         env.storage().instance().set(
             &CONFIG_KEY,
             &Config {
@@ -106,6 +107,7 @@ impl Treasury {
     /// already uses.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         sylox_types::upgrade::do_upgrade(&env, &config.governor, CONTRACT_VERSION, new_wasm_hash);
         Ok(())
     }
@@ -122,6 +124,7 @@ impl Treasury {
     /// decode under the new types) alongside it.
     pub fn migrate(env: Env) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         if !sylox_types::upgrade::do_migrate(
             &env,
             &config.governor,
@@ -152,6 +155,7 @@ impl Treasury {
         amount: i128,
     ) -> Result<(), Error> {
         from.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -193,6 +197,7 @@ impl Treasury {
     ) -> Result<i128, Error> {
         let config = Self::require_config(&env)?;
         config.staking.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         if !matches!(
             bucket,
             TreasuryBucket::KeeperRewards | TreasuryBucket::ReporterRewards
@@ -231,6 +236,7 @@ impl Treasury {
     /// Pays everything accrued to `who`. Auth: `who`.
     pub fn claim_reward(env: Env, who: Address) -> Result<i128, Error> {
         who.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let config = Self::require_config(&env)?;
         let amount = storage::get_accrued(&env, &who);
         if amount <= 0 {
@@ -259,6 +265,7 @@ impl Treasury {
     ) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -284,6 +291,7 @@ impl Treasury {
     pub fn spend(env: Env, bucket: TreasuryBucket, to: Address, amount: i128) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }

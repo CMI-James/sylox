@@ -177,6 +177,7 @@ impl RiskOracle {
     /// them, never calls them (see this constructor's own doc comment
     /// below for why).
     pub fn __constructor(env: Env, governor: Address, registry: Address, staking: Address) {
+        sylox_types::ttl::extend_instance(&env);
         env.storage().instance().set(
             &CONFIG_KEY,
             &Config {
@@ -205,6 +206,7 @@ impl RiskOracle {
     /// already uses.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         sylox_types::upgrade::do_upgrade(&env, &config.governor, CONTRACT_VERSION, new_wasm_hash);
         Ok(())
     }
@@ -221,6 +223,7 @@ impl RiskOracle {
     /// decode under the new types) alongside it.
     pub fn migrate(env: Env) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         if !sylox_types::upgrade::do_migrate(
             &env,
             &config.governor,
@@ -240,6 +243,7 @@ impl RiskOracle {
     pub fn add_asset(env: Env, cfg: AssetConfig) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         reject_asset_reference(&cfg.reference)?;
         if storage::get_asset_config(&env, &cfg.asset).is_some() {
             return Err(Error::AlreadyInitialized);
@@ -258,6 +262,7 @@ impl RiskOracle {
     pub fn update_asset(env: Env, asset: Address, cfg: AssetConfig) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         reject_asset_reference(&cfg.reference)?;
         let existing = storage::get_asset_config(&env, &asset).ok_or(Error::UnknownAsset)?;
         if existing.reference != cfg.reference {
@@ -271,6 +276,7 @@ impl RiskOracle {
     pub fn disable_asset(env: Env, asset: Address) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let mut cfg = storage::get_asset_config(&env, &asset).ok_or(Error::UnknownAsset)?;
         cfg.enabled = false;
         storage::set_asset_config(&env, &asset, &cfg);
@@ -290,6 +296,7 @@ impl RiskOracle {
         mut s: SignalSet,
     ) -> Result<(), Error> {
         keeper.require_auth();
+        sylox_types::ttl::extend_instance(&env);
 
         let config = Self::require_config(&env)?;
         if !StakingClient::new(&env, &config.staking).is_active_keeper(&keeper) {
@@ -395,6 +402,7 @@ impl RiskOracle {
         mut s: SignalSet,
     ) -> Result<(), Error> {
         keeper.require_auth();
+        sylox_types::ttl::extend_instance(&env);
 
         let config = Self::require_config(&env)?;
         if !StakingClient::new(&env, &config.staking).is_active_keeper(&keeper) {
@@ -571,6 +579,7 @@ impl RiskOracle {
         alt_hash: BytesN<32>,
     ) -> Result<(), Error> {
         disputer.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let config = Self::require_config(&env)?;
 
         let slot = storage::get_slot(&env, &asset, epoch).ok_or(Error::WrongEpoch)?;
@@ -635,6 +644,7 @@ impl RiskOracle {
         alt_hash: BytesN<32>,
     ) -> Result<(), Error> {
         disputer.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let config = Self::require_config(&env)?;
 
         let sub_epoch_secs = current_sub_epoch_secs(&env, &asset, hour);
@@ -752,6 +762,7 @@ impl RiskOracle {
         let config = Self::require_config(&env)?;
         let committee = GovernorClient::new(&env, &config.governor).committee();
         committee.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let _ = &reason; // stored only by EventRegistry-style callers in Phase 3; RiskOracle has nowhere to persist it yet (known gap).
 
         let dispute =
@@ -848,6 +859,7 @@ impl RiskOracle {
         let config = Self::require_config(&env)?;
         let committee = GovernorClient::new(&env, &config.governor).committee();
         committee.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let _ = &reason;
 
         let dispute =
@@ -899,7 +911,14 @@ impl RiskOracle {
             // sub-epoch: it could never be reposted, so every
             // successful dispute would permanently cost the hour that
             // one sub-epoch's worth of coverage.
-            storage::overturn_sub_signals(&env, &asset, hour, sub, now);
+            storage::overturn_sub_signals(
+                &env,
+                &asset,
+                hour,
+                sub,
+                sub_epochs_per_hour(sub_epoch_secs),
+                now,
+            );
         }
         storage::clear_sub_dispute(&env, &asset, hour, sub);
 
@@ -939,6 +958,7 @@ impl RiskOracle {
         epoch: u64,
     ) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let dispute =
             storage::get_dispute(&env, &asset, epoch).ok_or(Error::DisputeWindowClosed)?;
         let now = env.ledger().timestamp();
@@ -989,6 +1009,7 @@ impl RiskOracle {
         sub: u32,
     ) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let dispute =
             storage::get_sub_dispute(&env, &asset, hour, sub).ok_or(Error::DisputeWindowClosed)?;
         let now = env.ledger().timestamp();
@@ -1035,6 +1056,7 @@ impl RiskOracle {
     /// Section 7.4's "booked exactly once" requirement.
     pub fn finalize_endpoint(env: Env, asset: Address, epoch: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         let now = env.ledger().timestamp();
         let epoch_close = (epoch + 1) * EPOCH_SECS;
         if now < epoch_close {
@@ -1081,6 +1103,7 @@ impl RiskOracle {
     pub fn set_event_band(env: Env, asset: Address) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.registry.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let mut score = storage::get_score(&env, &asset).unwrap_or(RiskScore {
             epoch: 0,
             score: 0,
@@ -1098,6 +1121,7 @@ impl RiskOracle {
     pub fn clear_event_band(env: Env, asset: Address) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.registry.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         let mut score = storage::get_score(&env, &asset).ok_or(Error::UnknownAsset)?;
         score.band = score::band_for_score(score.score);
         storage::set_score(&env, &asset, &score);
@@ -1117,6 +1141,7 @@ impl RiskOracle {
     pub fn set_event_in_progress(env: Env, asset: Address, in_progress: bool) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.registry.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         storage::set_event_in_progress(&env, &asset, in_progress);
         // No recompute needed: `score()` applies this flag as a live
         // floor on every read (see its doc comment), so the change is
@@ -1172,6 +1197,7 @@ impl RiskOracle {
     ) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         score::validate_weights(&weights)?;
         storage::set_formula(
             &env,
@@ -1194,6 +1220,7 @@ impl RiskOracle {
     pub fn set_sub_epoch_secs(env: Env, asset: Address, value: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
         config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
         storage::get_asset_config(&env, &asset).ok_or(Error::UnknownAsset)?;
         if !SUB_EPOCH_SECS_ALLOWED.contains(&value) {
             return Err(Error::InvalidSubEpochInterval);
@@ -1275,6 +1302,7 @@ impl RiskOracle {
     /// since there is nothing to build from.
     pub fn build_hour(env: Env, asset: Address, hour: u64) -> Result<(), Error> {
         let config = Self::require_config(&env)?;
+        sylox_types::ttl::extend_instance(&env);
         storage::get_asset_config(&env, &asset).ok_or(Error::UnknownAsset)?;
 
         let now = env.ledger().timestamp();
@@ -1495,6 +1523,7 @@ impl RiskOracle {
     /// poll every asset itself (Section 22.4 in the upcoming spec
     /// v1.2 PR) without waiting for keeper activity to drive it.
     pub fn check_stale(env: Env, asset: Address) -> Result<bool, Error> {
+        sylox_types::ttl::extend_instance(&env);
         storage::get_asset_config(&env, &asset).ok_or(Error::UnknownAsset)?;
         check_stale_internal(&env, &asset)
     }

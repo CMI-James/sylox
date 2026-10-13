@@ -1544,6 +1544,230 @@ fn budget_dispute_copy_out_at_the_300s_default() {
     );
 }
 
+/// A fixture for the history-TTL tests below: a registered
+/// `MockGovernor` and `MockStaking`, one keeper per sub-epoch, and an
+/// `at` that moves time and ledger sequence together (5 seconds per
+/// ledger), so TTLs are checked against real elapsed time.
+struct TtlFx<'a> {
+    env: &'a Env,
+    client: RiskOracleClient<'a>,
+    contract_id: Address,
+    staking: crate::mocks::MockStakingClient<'a>,
+    governor: Address,
+    committee: Address,
+    asset: Address,
+    keepers: std::vec::Vec<Address>,
+    disputer: Address,
+}
+
+extern crate std;
+
+const TTL_HOUR: u64 = REALISTIC_EPOCH_BASE;
+
+impl<'a> TtlFx<'a> {
+    fn new(env: &'a Env) -> Self {
+        env.mock_all_auths();
+        let staking = env.register(crate::mocks::MockStaking, ());
+        let governor = env.register(MockGovernor, ());
+        let contract_id = env.register(
+            RiskOracle,
+            (governor.clone(), Address::generate(env), staking.clone()),
+        );
+        let client = RiskOracleClient::new(env, &contract_id);
+        let asset = Address::generate(env);
+        client.add_asset(&super::asset_config(env, &asset, &Address::generate(env)));
+        let per_hour = (EPOCH_SECS / SUB_EPOCH_SECS_DEFAULT) as usize;
+        TtlFx {
+            env,
+            client,
+            contract_id,
+            staking: crate::mocks::MockStakingClient::new(env, &staking),
+            governor,
+            committee: Address::generate(env),
+            asset,
+            keepers: (0..per_hour).map(|_| Address::generate(env)).collect(),
+            disputer: Address::generate(env),
+        }
+    }
+
+    fn at(&self, t: u64) {
+        self.env.ledger().set_timestamp(t);
+        self.env.ledger().set_sequence_number((t / 5) as u32);
+        // MockGovernor keeps its committee in temporary storage, which
+        // the test host expires as the ledger ages (test setup only).
+        crate::mocks::MockGovernorClient::new(self.env, &self.governor)
+            .set_committee(&self.committee);
+    }
+
+    fn signals(&self, peg_ratio: i128, tag: u8) -> sylox_types::SignalSet {
+        let mut s = signal_set(self.env, TTL_HOUR, peg_ratio);
+        s.liquidity_2pct = 500_000_000_000;
+        s.supply_change_bps = 0;
+        s.inputs_hash = soroban_sdk::BytesN::from_array(self.env, &[tag; 32]);
+        s
+    }
+
+    /// Every sub-epoch of the hour at its own close, sub 0 wrong. Each
+    /// gets inputs hash `[sub + 1; 32]`.
+    fn post_hour(&self) {
+        for sub in 0..self.keepers.len() as u32 {
+            self.at(sub_start(TTL_HOUR, sub, SUB_EPOCH_SECS_DEFAULT) + SUB_EPOCH_SECS_DEFAULT);
+            let peg_ratio = if sub == 0 { 1 } else { 10_000_000 };
+            self.client.post_sub_signals(
+                &self.keepers[sub as usize],
+                &self.asset,
+                &TTL_HOUR,
+                &sub,
+                &self.signals(peg_ratio, sub as u8 + 1),
+            );
+        }
+    }
+
+    fn sub_signals_ttl(&self, sub: u32) -> u32 {
+        use soroban_sdk::testutils::storage::Persistent as _;
+        let key = crate::storage::DataKey::SubSignals(self.asset.clone(), TTL_HOUR, sub);
+        self.env.as_contract(&self.contract_id, || {
+            self.env.storage().persistent().get_ttl(&key)
+        })
+    }
+}
+
+/// The longest wait the code can reach today on one contested
+/// sub-epoch: a second dispute cycle needs the repost to land in
+/// `Sub(asset)`'s ring (a held repost can't be disputed), so the first
+/// ruling must come within the ring's 5 hour span; the repost's dispute
+/// then times out as late as `SubDispute` lives. The hour builds about
+/// 7.2 days after its first post, with every sibling still live, the
+/// full inputs hash, and every keeper behind a Final sub-epoch paid.
+#[test]
+fn a_double_contested_hour_builds_in_full_at_a_late_timeout_about_7_2_days_later() {
+    use soroban_sdk::{Bytes, BytesN};
+
+    let env = Env::default();
+    let fx = TtlFx::new(&env);
+    let hour = TTL_HOUR;
+    let per_hour = fx.keepers.len() as u32;
+    fx.post_hour();
+    let first_post = sub_start(hour, 0, SUB_EPOCH_SECS_DEFAULT) + SUB_EPOCH_SECS_DEFAULT;
+    let ring_span_end = sub_start(hour, 0, SUB_EPOCH_SECS_DEFAULT) + crate::SUB_RING_SPAN_SECS;
+
+    // Cycle 1: disputed at the hour's close, overturned late enough that
+    // the repost only just lands in the ring.
+    fx.at(hour_close(hour));
+    fx.client
+        .dispute_sub_signals(&fx.disputer, &fx.asset, &hour, &0u32, &dummy_hash(&env));
+    fx.at(ring_span_end - 1_200);
+    fx.client
+        .resolve_sub_signal_dispute(&fx.asset, &hour, &0u32, &false, &dummy_hash(&env));
+
+    // Cycle 2: the repost, disputed, then timed out as late as
+    // `SubDispute` (the ruling window plus 1 day) still allows.
+    let reposter = Address::generate(&env);
+    fx.at(ring_span_end - 600);
+    fx.client.post_sub_signals(
+        &reposter,
+        &fx.asset,
+        &hour,
+        &0u32,
+        &fx.signals(10_000_000, 100),
+    );
+    let redisputed_at = ring_span_end - 540;
+    fx.at(redisputed_at);
+    fx.client
+        .dispute_sub_signals(&fx.disputer, &fx.asset, &hour, &0u32, &dummy_hash(&env));
+    let built_at = redisputed_at + crate::SIGNAL_DISPUTE_RULING_SECS + 86_400 - 600;
+    fx.at(built_at);
+    let days = (built_at - first_post) as f64 / 86_400.0;
+    assert!(
+        days > 7.15,
+        "the build lands {days:.2} days after the first post"
+    );
+
+    for sub in 1..per_hour {
+        assert!(
+            fx.sub_signals_ttl(sub) > 0,
+            "SubSignals sub {sub} expired before the build, {days:.2} days after its post"
+        );
+    }
+
+    fx.client
+        .resolve_sub_dispute_timeout(&fx.asset, &hour, &0u32);
+    assert!(
+        fx.client.is_final(&fx.asset, &hour),
+        "the hour builds at the timeout"
+    );
+
+    // The full inputs hash: the repost's, then every sibling's, in order.
+    let mut combined = Bytes::new(&env);
+    combined.append(&Bytes::from_array(&env, &[100u8; 32]));
+    for sub in 1..per_hour {
+        combined.append(&Bytes::from_array(&env, &[sub as u8 + 1; 32]));
+    }
+    let expected: BytesN<32> = env.crypto().sha256(&combined).into();
+    assert_eq!(
+        fx.client.signals(&fx.asset, &hour).unwrap().inputs_hash,
+        expected
+    );
+
+    // Every keeper behind a Final sub-epoch is paid once; the
+    // overturned first post is not.
+    for sub in 1..per_hour {
+        assert_eq!(
+            fx.staking
+                .reward_keeper_sub_epoch_count(&fx.keepers[sub as usize]),
+            1,
+            "keeper of sub {sub}"
+        );
+    }
+    assert_eq!(fx.staking.reward_keeper_sub_epoch_count(&reposter), 1);
+    assert_eq!(fx.staking.reward_keeper_sub_epoch_count(&fx.keepers[0]), 0);
+}
+
+/// An overturn re-extends every other `SubSignals` entry of the hour to
+/// the full history lifetime, the safeguard for the spec's two-cycle
+/// case (Section 5.9 S2). Overturned near its 6 day ruling deadline,
+/// the siblings are down to about 4 days, below the 8 day threshold.
+#[test]
+fn an_overturn_re_extends_every_sibling_sub_signals_to_the_history_lifetime() {
+    use sylox_types::ttl::{HISTORY_TTL_EXTEND_TO, HISTORY_TTL_THRESHOLD};
+
+    let env = Env::default();
+    let fx = TtlFx::new(&env);
+    let hour = TTL_HOUR;
+    let per_hour = fx.keepers.len() as u32;
+    fx.post_hour();
+
+    let disputed_at = hour_close(hour);
+    fx.at(disputed_at);
+    fx.client
+        .dispute_sub_signals(&fx.disputer, &fx.asset, &hour, &0u32, &dummy_hash(&env));
+    fx.at(disputed_at + crate::SIGNAL_DISPUTE_RULING_SECS - 60);
+    for sub in 1..per_hour {
+        assert!(
+            fx.sub_signals_ttl(sub) < HISTORY_TTL_THRESHOLD,
+            "sub {sub} must be below the threshold before the overturn"
+        );
+    }
+
+    fx.client
+        .resolve_sub_signal_dispute(&fx.asset, &hour, &0u32, &false, &dummy_hash(&env));
+
+    for sub in 1..per_hour {
+        assert_eq!(
+            fx.sub_signals_ttl(sub),
+            HISTORY_TTL_EXTEND_TO,
+            "sub {sub} must be re-extended by the overturn"
+        );
+    }
+    let overturned = env.as_contract(&fx.contract_id, || {
+        crate::storage::get_sub_signals(&env, &fx.asset, hour, 0)
+    });
+    assert!(
+        overturned.is_none(),
+        "the overturned sub-epoch itself moved to history"
+    );
+}
+
 fn dummy_hash(env: &Env) -> soroban_sdk::BytesN<32> {
     soroban_sdk::BytesN::from_array(env, &[1u8; 32])
 }
