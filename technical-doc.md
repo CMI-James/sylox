@@ -1946,6 +1946,7 @@ Each contract defines a `#[contracterror]` enum with `u32` codes in its own rang
 | 113 | `InvalidSubEpochInterval` (v1.5) | RiskOracle | `sub_epoch_secs` set to a value outside {300, 600, 900, 1,200, 1,800, 3,600}, or one that does not divide 3,600 evenly (Section 5.9, S1) |
 | 114 | `SubEpochNotReady` (v1.5) | RiskOracle | An hour-build was requested while at least one of its sub-epochs is still Pending or Disputed, i.e. not yet Final, permanently missing, or rejected (Section 5.9, S4) |
 | 115 | `HourAlreadyPosted` (v1.5) | RiskOracle | A sub-epoch post against an hour already posted through the hourly fallback path, or an hourly fallback post against an hour that already has a sub-epoch posted (Section 5.9, S2) |
+| 116 | `AlreadyMigrated` | RiskOracle | `migrate` called with a `target_version` already applied, or an older one; each storage-shape migration runs at most once (issue #12) |
 | 117 | `SubEpochChangeTooSoon` | RiskOracle | `set_sub_epoch_secs` called fewer than 240 hours after the previous change took effect; a change still pending may be replaced (Section 5.9, S1) |
 | 200 | `UnknownDefinition` | EventRegistry | No canonical definition for (asset, kind), or no such version |
 | 201 | `EventInProgress` | EventRegistry | Another event is open for this (asset, kind) |
