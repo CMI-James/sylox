@@ -846,7 +846,7 @@ Tier 1 checks (Section 8.2), the cover gate (Section 9.4) and the 24 hour and 7 
 - **Missing epochs:** an `Empty` slot, or one still `Pending` or `Disputed` when a check runs, is missing. Missing epochs count neither for nor against a Depeg (Section 8.2) nor against the score's own aggregates (Section 6.5): a missing epoch's contribution to a sum is 0 and uncounted, and a missing epoch is excluded from `peg_ratio_p10`'s percentile input entirely, not treated as present with some default value.
 - **`final_announced` flag:** one byte per slot (layout version 2) marking whether `signals_final` has already been emitted for that epoch, so the backward scan never re-announces the same epoch. Set `true` only when a scan or a resolution first observes the epoch Final; reset to unannounced on a repost after an overturn. Not part of the `RingSlot` shape `ring(asset)` returns; it is bookkeeping for event emission, not signal data.
 - **Encoding:** slots are stored packed as fixed width fields, no field names: 112 bytes per slot (106 used, padded for fixed offsets), plus a 9 byte header (layout version, slot count, slot width) validated on every read, 26,889 bytes for a full 240 slot ring. Measured against a naive `Vec<RingSlot>` using the SDK's own `#[contracttype]` derive (which encodes a struct as an XDR map of named fields): about 440 bytes per slot, 105,732 bytes for 240 slots, 61% over `contract_data_entry_size_bytes` (65,536). The packed encoding is required to fit at all; it is not achievable by storing the existing `RingSlot` type directly, only by hand (de)serializing it. The `ring(asset)` read still returns `Vec<RingSlot>` to callers; only the persisted representation is packed.
-- **Write cost:** one ring write per accepted posting, plus the `Signals(asset, epoch)` entry kept for 30 days of direct history (Section 15.2). Measured against a full 240 slot ring: 1,891,655 CPU instructions (0.47% of `tx_max_instructions`), 28,012 bytes written (21.21% of `tx_max_write_bytes`, the binding constraint, though still well under it). The packed single entry design fits with headroom; no paging fallback is needed.
+- **Write cost:** one ring write per accepted posting, plus the `Signals(asset, epoch)` entry kept for 10 days of direct history (Section 15.2). Measured against a full 240 slot ring: 1,891,655 CPU instructions (0.47% of `tx_max_instructions`), 28,012 bytes written (21.21% of `tx_max_write_bytes`, the binding constraint, though still well under it). The packed single entry design fits with headroom; no paging fallback is needed.
 
 ### 5.9 Sub-epochs and the hourly roll-up (v1.5)
 
@@ -2069,10 +2069,10 @@ Funds sit only where the "Holds funds?" column of Section 3.1 says: `Series` (co
 | --- | --- | --- |
 | Contract instance and code | Indefinite | Every call; plus an ops job (Section 22) |
 | Asset config, score, ring buffer | Indefinite while asset is enabled | Every `post_signals` |
-| Individual `Signals(asset, epoch)` | 30 days | On write; history beyond that lives in the indexer and the inputs bundles |
-| `HourPostedVia(asset, hour)` (v1.5) | 30 days | On write (re-extended on a later write only below 20 days left) |
-| `SubSignals(asset, hour, sub)` (v1.5) | 30 days | On write; history beyond that lives in the indexer and the inputs bundles |
-| Overturn and repost records: `Overturned(asset, epoch)`, `SubOverturned(asset, hour, sub)`, `SubRepostUsed(asset, hour, sub)` | 30 days | On write |
+| Individual `Signals(asset, epoch)` | 10 days (deviation 1 below) | On write; history beyond that lives in the indexer and the inputs bundles |
+| `HourPostedVia(asset, hour)` (v1.5) | 10 days | On write (re-extended on a later write only below 8 days left) |
+| `SubSignals(asset, hour, sub)` (v1.5) | 10 days | On write, and again when a sibling sub-epoch of the same hour is overturned (deviation 2 below); history beyond that lives in the indexer and the inputs bundles |
+| Overturn and repost records: `Overturned(asset, epoch)`, `SubOverturned(asset, hour, sub)`, `SubRepostUsed(asset, hour, sub)` | 10 days | On write |
 | Definitions, canonical pointers, event status | Indefinite while the asset is enabled | Every touch; ops job |
 | Event records (`EventRegistry`) and bonds (`Staking`) | 1 year after resolution | Every touch; ops job |
 | Keeper and reporter records, claimable balances (`Staking`), accrued rewards (`Treasury`) | Until withdrawn or claimed, minimum 1 year after the last change | Every touch; ops job |
@@ -2085,6 +2085,11 @@ Funds sit only where the "Holds funds?" column of Section 3.1 says: `Series` (co
 A claimant whose balance entry was archived can restore it with a standard restore footprint transaction before claiming. The SDK does this automatically when simulation reports an archived entry.
 
 The live testnet contracts get this policy through `upgrade()` (issue #12); the `deploy/extend-ttl.sh` cron stays until then.
+
+Deviations from the original 30-day history lifetime (issue #28):
+
+1. `Signals` and every other history key above get 10 days, not 30. 10 days is the ring's own span (240 hourly slots), and it covers the longest live need of a single dispute (the 2 hour dispute window plus the 6 day ruling) with almost 4 days of margin. `SubSignals` are written up to 288 times a day per asset, so 30 days of prepaid rent on each was too much.
+2. `SubSignals` entries are re-extended when a sibling sub-epoch is overturned, covering the two-dispute-cycle worst case. That case (about 12.3 days, or 13.2 with a late timeout, Section 5.9 S2) becomes reachable only once held reposts can be disputed; today a repost that lands in `HeldHour` can't be, which caps the wait at about 7.2 days.
 
 ### 15.3 Size limits
 

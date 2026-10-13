@@ -216,7 +216,7 @@ fn sub_epoch_posting_disputes_and_build_hour_extend_what_they_touch() {
 }
 
 /// A disputed `Signals(asset, epoch)` written with the history policy
-/// (30 days) is still live when its ruling deadline arrives: the 2 hour
+/// (10 days) is still live when its ruling deadline arrives: the 2 hour
 /// dispute window plus the 6 day `SIGNAL_DISPUTE_RULING_SECS`, measured
 /// in ledgers at `SECONDS_PER_LEDGER`. At the network minimum (about 7
 /// days) that margin would be under a day.
@@ -239,7 +239,7 @@ fn a_disputed_history_entry_is_still_live_at_its_ruling_deadline() {
     assert_eq!(
         ttl(),
         HISTORY_TTL_EXTEND_TO,
-        "history keys get 30 days, not 365"
+        "history keys get 10 days, not 365"
     );
 
     fx.client

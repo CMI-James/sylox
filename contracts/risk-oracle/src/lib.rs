@@ -911,7 +911,14 @@ impl RiskOracle {
             // sub-epoch: it could never be reposted, so every
             // successful dispute would permanently cost the hour that
             // one sub-epoch's worth of coverage.
-            storage::overturn_sub_signals(&env, &asset, hour, sub, now);
+            storage::overturn_sub_signals(
+                &env,
+                &asset,
+                hour,
+                sub,
+                sub_epochs_per_hour(sub_epoch_secs),
+                now,
+            );
         }
         storage::clear_sub_dispute(&env, &asset, hour, sub);
 

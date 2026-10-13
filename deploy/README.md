@@ -328,8 +328,10 @@ days of TTL, and the longest a live call needs one is the 2h dispute
 window plus the 6 day ruling window (`SIGNAL_DISPUTE_RULING_SECS` =
 518,400s) - about 22 hours of slack. The contract code now removes it:
 every write-once history key (`Signals`, `HourPostedVia`, `SubSignals`,
-`Overturned`, `SubOverturned`, `SubRepostUsed`) is extended to 30 days
-on write (technical-doc.md Section 15.2). The live contracts get that
+`Overturned`, `SubOverturned`, `SubRepostUsed`) is extended to 10 days
+on write, almost 4 days of slack, and an overturn re-extends the other
+`SubSignals` of its hour (technical-doc.md Section 15.2). The live
+contracts get that
 through `upgrade()`; this script does not widen the margin, and stays
 until then.
 

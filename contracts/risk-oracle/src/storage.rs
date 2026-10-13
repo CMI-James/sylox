@@ -1493,7 +1493,14 @@ pub struct SubOverturnedRecord {
 /// there was no `SubSignals` entry for this sub-epoch (defensive;
 /// `resolve_sub_signal_dispute`'s caller already checked one exists
 /// before calling this).
-pub fn overturn_sub_signals(env: &Env, asset: &Address, hour: u64, sub: u32, now: u64) {
+pub fn overturn_sub_signals(
+    env: &Env,
+    asset: &Address,
+    hour: u64,
+    sub: u32,
+    per_hour: u32,
+    now: u64,
+) {
     let key = DataKey::SubSignals(asset.clone(), hour, sub);
     if let Some(signals) = env.storage().persistent().get::<_, SignalSet>(&key) {
         let repost_used_key = DataKey::SubRepostUsed(asset.clone(), hour, sub);
@@ -1515,6 +1522,26 @@ pub fn overturn_sub_signals(env: &Env, asset: &Address, hour: u64, sub: u32, now
             },
         );
         env.storage().persistent().remove(&key);
+
+        // The hour can't build until the repost's own dispute cycle
+        // ends: about 12.3 days after the first post, or about 13.2
+        // with a late timeout (Section 5.9 S2). The build then reads
+        // every sub-epoch in the hour through `hash_sub_epoch_inputs`
+        // and `reward_sub_epoch_keepers`, so the siblings written at
+        // the first post must outlive their own 10 days. Today a held
+        // repost can't be disputed, which caps the wait at about 7.2
+        // days; this keeps the hour whole once that changes.
+        let storage = env.storage().persistent();
+        for sibling in 0..per_hour {
+            let sibling_key = DataKey::SubSignals(asset.clone(), hour, sibling);
+            if sibling != sub && storage.has(&sibling_key) {
+                storage.extend_ttl(
+                    &sibling_key,
+                    sylox_types::ttl::HISTORY_TTL_THRESHOLD,
+                    sylox_types::ttl::HISTORY_TTL_EXTEND_TO,
+                );
+            }
+        }
     }
 }
 

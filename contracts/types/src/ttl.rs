@@ -72,27 +72,33 @@ where
 
 /// Write-once history entries (`RiskOracle`'s `Signals`, `HourPostedVia`,
 /// `SubSignals`, `Overturned`, `SubOverturned`, `SubRepostUsed`): extend
-/// to 30 days, technical-doc.md Section 15.2's own lifetime for
-/// `Signals`. Not the network minimum: a fresh entry there gets about 7
-/// days, against the 2 hour dispute window plus the 6 day ruling window
-/// a disputed entry must outlive, the thin margin deploy/README.md warns
-/// about. Not the 365 day persistent target either: these entries are
-/// created on every post, so a year of prepaid rent per post is the one
-/// cost this policy must not add. Older history lives in the indexer and
-/// the inputs bundles.
-pub const HISTORY_TTL_EXTEND_TO: u32 = 518_400;
-/// ... re-extended on a later write only once less than 20 days remain.
-/// Every live read of a history entry happens within about 12.3 days of
-/// its write (the worst case: one contested sub-epoch going through two
-/// full dispute cycles before its hour builds, Section 5.9 S2), so 20
-/// days left at any write already covers every use with margin. The
-/// same 20 days as `INSTANCE_TTL_THRESHOLD`, so a rewrite (for example
-/// `HourPostedVia` on each sub-epoch post of the same hour) pays for an
-/// extension at most once every 10 days rather than on every call.
-pub const HISTORY_TTL_THRESHOLD: u32 = 345_600;
+/// to 10 days. That is the ring's own span (240 hourly slots), and it
+/// covers the longest live need of a single dispute, the 2 hour dispute
+/// window plus the 6 day ruling, with almost 4 days of margin. The
+/// spec's longer case, an hour waiting on two dispute cycles (about
+/// 12.3 days, or 13.2 with a late timeout, Section 5.9 S2), is covered
+/// by re-extending the hour's other `SubSignals` when one is
+/// overturned. Today that case is capped at about 7.2 days, since a
+/// held repost can't be disputed; the re-extension is the safeguard for
+/// when it can.
+/// Not the 365 day persistent target: these entries are created on
+/// every post, up to 288 times a day per asset, so their rent is the
+/// one cost this policy must keep small. Older history lives in the
+/// indexer and the inputs bundles. technical-doc.md Section 15.2.
+pub const HISTORY_TTL_EXTEND_TO: u32 = 172_800;
+/// ... re-extended on a later write only once less than 8 days remain.
+/// After any write, the longest a history entry can still be needed is
+/// a repost (2 hours) plus its dispute window (2 hours) plus a ruling
+/// that times out late (up to 7 days, `SubDispute`'s own lifetime):
+/// about 7 days 4 hours. 8 days left at any write covers that, and the
+/// sibling re-extension on an overturn relies on it. Below the extend-to
+/// value, so a rewrite soon after the first write (for example
+/// `HourPostedVia` on each sub-epoch post of the same hour) pays no
+/// extra rent.
+pub const HISTORY_TTL_THRESHOLD: u32 = 138_240;
 
 /// Writes a write-once history entry and extends it with the
-/// `HISTORY_TTL_*` constants (30 days), not the 365 day persistent
+/// `HISTORY_TTL_*` constants (10 days), not the 365 day persistent
 /// target `set_persistent` uses.
 pub fn set_history<K, V>(env: &Env, key: &K, val: &V)
 where

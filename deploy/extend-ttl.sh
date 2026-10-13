@@ -32,7 +32,7 @@
 # the longest a live call needs one is the 2h dispute window plus the
 # 6 day ruling window (SIGNAL_DISPUTE_RULING_SECS = 518,400s) - about
 # 22 hours of slack. The contract code now extends every write-once
-# history key to 30 days on write (technical-doc.md Section 15.2); the
+# history key to 10 days on write (technical-doc.md Section 15.2); the
 # live contracts get that through upgrade(). This script does not
 # change the margin, and stays until then.
 #
