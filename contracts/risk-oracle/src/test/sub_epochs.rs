@@ -135,6 +135,131 @@ fn changing_sub_epoch_secs_takes_effect_only_at_the_next_hour_boundary() {
     );
 }
 
+/// What `sub_epoch_config` says is in force for `hour`: the pending
+/// value from `effective_from_hour` on, the current value before it.
+fn in_force_per_config(cfg: &sylox_types::SubEpochConfig, hour: u64) -> u64 {
+    match (cfg.pending_sub_epoch_secs, cfg.effective_from_hour) {
+        (Some(pending), Some(from)) if hour >= from => pending,
+        _ => cfg.sub_epoch_secs,
+    }
+}
+
+/// `sub_epoch_secs_at` and `sub_epoch_config` agree for every hour
+/// around each change, before any change, while one is pending, and
+/// once it is in force.
+#[test]
+fn sub_epoch_config_and_sub_epoch_secs_at_agree() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let hour = REALISTIC_EPOCH_BASE;
+    let check = |label: &str| {
+        let cfg = fx.client.sub_epoch_config(&asset);
+        for h in hour - 2..hour + 6 {
+            let expected = cfg
+                .as_ref()
+                .map(|c| in_force_per_config(c, h))
+                .unwrap_or(SUB_EPOCH_SECS_DEFAULT);
+            assert_eq!(
+                fx.client.sub_epoch_secs_at(&asset, &h),
+                expected,
+                "{label}, hour {h}"
+            );
+        }
+    };
+
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
+    check("no config yet");
+    fx.client.set_sub_epoch_secs(&asset, &600);
+    check("600 pending");
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &hour), 300);
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &(hour + 1)), 600);
+
+    env.ledger().set_timestamp((hour + 2) * EPOCH_SECS + 60);
+    check("600 in force");
+    fx.client.set_sub_epoch_secs(&asset, &900);
+    check("900 pending after 600 took effect");
+}
+
+/// A second `set_sub_epoch_secs` after the first took effect keeps the
+/// value actually in force as current: the first change's pending value
+/// is promoted, and the hour the second change is made in keeps it.
+/// Before the fix the config fell back to the original 300, so the
+/// current hour switched back to 300 mid-hour.
+#[test]
+fn a_second_change_after_the_first_took_effect_keeps_the_value_in_force() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let keeper = Address::generate(&env);
+    let hour = REALISTIC_EPOCH_BASE;
+
+    env.ledger().set_timestamp(hour * EPOCH_SECS + 60);
+    fx.client.set_sub_epoch_secs(&asset, &600);
+
+    // Two hours later 600 is in force; post sub 0 of that hour at 600.
+    let second_hour = hour + 2;
+    post_sub(
+        &env,
+        &fx.client,
+        &keeper,
+        &asset,
+        second_hour,
+        0,
+        600,
+        10_000_000,
+    );
+    fx.client.set_sub_epoch_secs(&asset, &900);
+
+    let cfg = fx.client.sub_epoch_config(&asset).unwrap();
+    assert_eq!(
+        cfg.sub_epoch_secs, 600,
+        "the value in force is promoted to current"
+    );
+    assert_eq!(cfg.pending_sub_epoch_secs, Some(900));
+    assert_eq!(cfg.effective_from_hour, Some(second_hour + 1));
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &second_hour), 600);
+    assert_eq!(fx.client.sub_epoch_secs_at(&asset, &(second_hour + 1)), 900);
+
+    // The rest of the current hour is still addressed at 600: sub 1
+    // covers [600, 1200), and `live` reads it back as sub 1.
+    post_sub(
+        &env,
+        &fx.client,
+        &keeper,
+        &asset,
+        second_hour,
+        1,
+        600,
+        10_000_000,
+    );
+    let (live, _, _) = fx.client.live(&asset).unwrap();
+    assert_eq!((live.hour, live.sub), (second_hour, 1));
+
+    // The next hour uses 900: four sub-epochs, sub 3 the last.
+    post_sub(
+        &env,
+        &fx.client,
+        &keeper,
+        &asset,
+        second_hour + 1,
+        3,
+        900,
+        10_000_000,
+    );
+    let (live, _, _) = fx.client.live(&asset).unwrap();
+    assert_eq!((live.hour, live.sub), (second_hour + 1, 3));
+
+    // Two changes inside the same hour: the second replaces the first,
+    // and the value in force for the current hour is unchanged.
+    env.ledger()
+        .set_timestamp((second_hour + 1) * EPOCH_SECS + 3_000);
+    fx.client.set_sub_epoch_secs(&asset, &1_200);
+    fx.client.set_sub_epoch_secs(&asset, &1_800);
+    let cfg = fx.client.sub_epoch_config(&asset).unwrap();
+    assert_eq!(cfg.sub_epoch_secs, 900);
+    assert_eq!(cfg.pending_sub_epoch_secs, Some(1_800));
+    assert_eq!(cfg.effective_from_hour, Some(second_hour + 2));
+}
+
 /// S2: an hour is posted through exactly one path; a sub-epoch post
 /// against an hour already posted through the hourly fallback is
 /// rejected, and the reverse.

@@ -34,6 +34,7 @@ mod events;
 mod storage;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
+use sylox_types::time::EPOCH_SECS;
 use sylox_types::{
     AssetEventStatus, Band, CoverGate, EventKind, GuardStatus, Quote, SellerPosition, SeriesState,
     SeriesTerms, SeriesTotals, TreasuryBucket,
@@ -612,24 +613,37 @@ impl Series {
     /// M1 (design note Section 2): allowed if the newest posted
     /// sub-epoch is the last one that closed, OR it is the one before
     /// that AND fewer than `feed_grace_secs` have passed since the
-    /// last sub-epoch closed.
+    /// last sub-epoch closed. Each boundary uses the sub-epoch length in
+    /// force for its own hour (`RiskOracle.sub_epoch_secs_at`), so a
+    /// `sub_epoch_secs` change taking effect at an hour boundary is
+    /// measured the same way the oracle measures it.
     fn check_feed_not_behind(
         env: &Env,
         oracle: &RiskOracleClient,
         asset: &Address,
     ) -> Result<(), Error> {
         let (sub_epoch, _signals, _slot_state) = oracle.live(asset).ok_or(Error::FeedBehind)?;
-        let sub_epoch_secs = oracle
-            .sub_epoch_config(asset)
-            .map(|c| c.sub_epoch_secs)
-            .unwrap_or(300);
-        let posted_close = sub_epoch.hour * 3_600 + (sub_epoch.sub as u64 + 1) * sub_epoch_secs;
         let now = env.ledger().timestamp();
-        let last_closed_boundary = (now / sub_epoch_secs) * sub_epoch_secs;
+        let current_hour = now / EPOCH_SECS;
+        let current_len = oracle.sub_epoch_secs_at(asset, &current_hour);
+        let len_at = |hour: u64| {
+            if hour == current_hour {
+                current_len
+            } else {
+                oracle.sub_epoch_secs_at(asset, &hour)
+            }
+        };
+
+        let posted_close =
+            sub_epoch.hour * EPOCH_SECS + (sub_epoch.sub as u64 + 1) * len_at(sub_epoch.hour);
+        let last_closed_boundary = (now / current_len) * current_len;
         if posted_close == last_closed_boundary {
             return Ok(());
         }
-        if posted_close + sub_epoch_secs == last_closed_boundary
+        // The sub-epoch that closed at `last_closed_boundary` belongs to
+        // the previous hour when that boundary is the hour's own start.
+        let closing_len = len_at((last_closed_boundary - 1) / EPOCH_SECS);
+        if posted_close + closing_len == last_closed_boundary
             && now - last_closed_boundary < FEED_GRACE_SECS
         {
             return Ok(());

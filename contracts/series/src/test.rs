@@ -17,7 +17,7 @@ use soroban_sdk::{
 };
 use sylox_types::{
     AssetEventStatus, Band, CoverGate, EventKind, SeriesState, SeriesTerms, SignalSet, SlotState,
-    SubEpoch, SubEpochConfig,
+    SubEpoch,
 };
 
 use crate::{Error, Series, SeriesClient};
@@ -127,9 +127,9 @@ impl MockRiskOracle {
             .unwrap_or(sylox_types::SCALE)
     }
 
-    pub fn sub_epoch_config(env: Env, _asset: Address) -> Option<SubEpochConfig> {
+    pub fn sub_epoch_secs_at(env: Env, _asset: Address, _hour: u64) -> u64 {
         let _ = env;
-        None
+        DEFAULT_SUB_EPOCH_SECS
     }
 }
 

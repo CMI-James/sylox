@@ -513,3 +513,190 @@ fn a_series_with_no_buyer_still_leaves_the_live_list_and_pins_at_expiry() {
     assert_ne!(second, series_address);
     assert_eq!(fx.factory.series_for(&asset).len(), 1);
 }
+
+// -- M1 across a `sub_epoch_secs` change (issue: the feed check used
+// the asset's current length for every boundary) --
+
+/// One real market for the feed-check tests: 168 healthy hourly epochs
+/// ending at `hour - 1`, a series opened at `hour`, one seller quoting,
+/// one funded buyer, and an active keeper.
+struct FeedMarket<'a> {
+    env: &'a Env,
+    fx: Fixture<'a>,
+    keeper: Address,
+    asset: Address,
+    series: SeriesClient<'a>,
+    buyer: Address,
+    hour: u64,
+}
+
+impl<'a> FeedMarket<'a> {
+    fn new(env: &'a Env) -> Self {
+        const EPOCH_BASE: u64 = 497_000;
+        const KEEPER_BOND: i128 = 50_000_000_000;
+        let fx = setup(env);
+        let issuer = Address::generate(env);
+        let asset = env
+            .register_stellar_asset_contract_v2(issuer.clone())
+            .address();
+        fx.oracle.add_asset(&asset_config(env, &asset, &issuer));
+        fx.registry.register_definition(&depeg_definition(&asset));
+        fx.factory
+            .set_related_sellers(&asset, &Vec::from_array(env, [issuer]));
+        let keeper = Address::generate(env);
+        fx.staking.add_keeper(&keeper);
+        fx.usdc_admin_client.mint(&keeper, &KEEPER_BOND);
+        fx.staking.stake(&keeper, &KEEPER_BOND);
+        post_run(env, &fx.oracle, &keeper, &asset, EPOCH_BASE, 168, 9_900_000);
+
+        let hour = EPOCH_BASE + 168;
+        let mut def_versions = Map::new(env);
+        def_versions.set(EventKind::Depeg, 1u32);
+        let series = SeriesClient::new(
+            env,
+            &fx.factory.open_series(&SeriesTerms {
+                asset: asset.clone(),
+                def_versions,
+                settlement: fx.usdc.clone(),
+                start: hour * EPOCH_SECS,
+                expiry: hour * EPOCH_SECS + 90 * 86_400,
+                claim_window_secs: 30 * 86_400,
+                cap: 10_000_000_000_000,
+                max_cover_per_buyer: 10_000_000_000_000,
+                require_holding: false,
+                fee_bps: 750,
+            }),
+        );
+        let seller = Address::generate(env);
+        let collateral = 20_000 * 10_000_000i128;
+        fx.usdc_admin_client.mint(&seller, &collateral);
+        series.deposit(&seller, &collateral);
+        series.quote(&seller, &500u32, &collateral);
+        let buyer = Address::generate(env);
+        fx.usdc_admin_client.mint(&buyer, &(1_000 * 10_000_000i128));
+        FeedMarket {
+            env,
+            fx,
+            keeper,
+            asset,
+            series,
+            buyer,
+            hour,
+        }
+    }
+
+    fn at(&self, t: u64) {
+        self.env.ledger().set_timestamp(t);
+    }
+
+    /// `set_sub_epoch_secs` at time `t`; it takes effect the next hour.
+    fn change_length(&self, t: u64, secs: u64) {
+        self.at(t);
+        self.fx.oracle.set_sub_epoch_secs(&self.asset, &secs);
+    }
+
+    /// Posts sub-epoch `sub` of `hour` at its own close, `len` long.
+    fn post_sub(&self, hour: u64, sub: u32, len: u64) {
+        self.at(hour * EPOCH_SECS + (sub as u64 + 1) * len);
+        self.fx.oracle.post_sub_signals(
+            &self.keeper,
+            &self.asset,
+            &hour,
+            &sub,
+            &signal_set(self.env, &self.keeper, hour, 9_900_000),
+        );
+    }
+
+    /// Buys a small amount of cover at time `t`; returns the error, if any.
+    fn buy_at(&self, t: u64) -> Option<crate::Error> {
+        self.at(t);
+        let amount = 100 * 10_000_000i128;
+        let max_premium = self.series.premium_quote(&amount, &500u32).1;
+        match self
+            .series
+            .try_buy_cover(&self.buyer, &amount, &500u32, &max_premium)
+        {
+            Ok(Ok(_)) => None,
+            Err(Ok(e)) => Some(e),
+            other => panic!("unexpected buy_cover result: {other:?}"),
+        }
+    }
+}
+
+/// The length changes from 300 to 600 at the next hour. Once the new
+/// hour's first 600 second sub-epoch is posted, a sale 150 seconds
+/// later (past the 120 second grace) sees a feed that is not behind.
+/// Measured with the old 300 length, the posted sub-epoch would close
+/// 300 seconds too early and the sale would read `FeedBehind`.
+#[test]
+fn a_length_change_across_the_hour_boundary_still_passes_the_feed_check() {
+    let env = Env::default();
+    let m = FeedMarket::new(&env);
+    let h = m.hour;
+    m.change_length(h * EPOCH_SECS + 60, 600);
+    m.post_sub(h, 11, 300);
+    m.post_sub(h + 1, 0, 600);
+    let close = (h + 1) * EPOCH_SECS + 600;
+    assert_eq!(m.fx.oracle.sub_epoch_secs_at(&m.asset, &(h + 1)), 600);
+    assert_eq!(m.buy_at(close + 150), None);
+}
+
+/// The hour boundary itself, with the length changing there: the
+/// newest posted sub-epoch is the old hour's last 300 second one, which
+/// closes exactly at the boundary. It is the last closed sub-epoch right
+/// after the boundary, still within grace once the new hour's first 600
+/// second sub-epoch has closed unposted, and behind past that grace.
+#[test]
+fn the_hour_boundary_itself_uses_each_side_s_own_length() {
+    let env = Env::default();
+    let m = FeedMarket::new(&env);
+    let h = m.hour;
+    m.change_length(h * EPOCH_SECS + 60, 600);
+    m.post_sub(h, 11, 300);
+    let boundary = (h + 1) * EPOCH_SECS;
+
+    assert_eq!(m.buy_at(boundary), None, "exactly at the boundary");
+    assert_eq!(m.buy_at(boundary + 30), None, "just after it");
+    assert_eq!(
+        m.buy_at(boundary + 600 + 60),
+        None,
+        "one sub-epoch behind, within grace"
+    );
+    assert_eq!(
+        m.buy_at(boundary + 600 + 130),
+        Some(crate::Error::FeedBehind),
+        "one sub-epoch behind, past grace"
+    );
+}
+
+/// Two changes in a row: 300 to 600, then, two hours later while 600 is
+/// in force, 600 to 900. The hour of the second change keeps 600 and the
+/// next one uses 900, and a sale passes the feed check in each.
+#[test]
+fn two_length_changes_in_a_row_still_pass_the_feed_check() {
+    let env = Env::default();
+    let m = FeedMarket::new(&env);
+    let h = m.hour;
+    // Hourly posts for the first two hours keep the asset fresh; the
+    // sub-epoch posts below start in the third.
+    post_run(&env, &m.fx.oracle, &m.keeper, &m.asset, h, 2, 9_900_000);
+    m.change_length(h * EPOCH_SECS + 60, 600);
+    m.change_length((h + 2) * EPOCH_SECS + 60, 900);
+    let cfg = m.fx.oracle.sub_epoch_config(&m.asset).unwrap();
+    assert_eq!(cfg.sub_epoch_secs, 600);
+    assert_eq!(cfg.pending_sub_epoch_secs, Some(900));
+
+    m.post_sub(h + 2, 1, 600);
+    assert_eq!(
+        m.buy_at((h + 2) * EPOCH_SECS + 1_200 + 150),
+        None,
+        "600 still in force for the hour of the second change"
+    );
+    m.post_sub(h + 2, 5, 600);
+    m.post_sub(h + 3, 0, 900);
+    assert_eq!(
+        m.buy_at((h + 3) * EPOCH_SECS + 900 + 150),
+        None,
+        "900 in force from the next hour"
+    );
+}

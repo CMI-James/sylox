@@ -1230,17 +1230,16 @@ impl RiskOracle {
         let current_hour = now / EPOCH_SECS;
         let effective_from_hour = current_hour + 1;
 
-        // The CURRENTLY effective interval, preserved as-is: a config
-        // that has never been set before is implicitly governing every
-        // hour so far at SUB_EPOCH_SECS_DEFAULT (current_sub_epoch_secs's
-        // own fallback for "no config yet"), so that default is what
-        // must carry forward as `sub_epoch_secs` here too. Using `value`
-        // (the NEW, not-yet-effective interval) instead would make the
-        // change apply retroactively to the current, still-open hour,
-        // exactly what effective_from_hour exists to prevent.
-        let current = storage::get_sub_epoch_config(&env, &asset)
-            .map(|c| c.sub_epoch_secs)
-            .unwrap_or(SUB_EPOCH_SECS_DEFAULT);
+        // The interval actually in force for the current hour carries
+        // forward as `sub_epoch_secs`: an earlier pending value whose
+        // hour has arrived is promoted here, and one still pending is
+        // replaced. A config that has never been set is implicitly
+        // SUB_EPOCH_SECS_DEFAULT (current_sub_epoch_secs's own
+        // fallback). Using `value` (the NEW, not-yet-effective
+        // interval) instead would make the change apply retroactively
+        // to the current, still-open hour, exactly what
+        // effective_from_hour exists to prevent.
+        let current = current_sub_epoch_secs(&env, &asset, current_hour);
         storage::set_sub_epoch_config(
             &env,
             &asset,
@@ -1265,6 +1264,15 @@ impl RiskOracle {
     /// yet in effect.
     pub fn sub_epoch_config(env: Env, asset: Address) -> Option<sylox_types::SubEpochConfig> {
         storage::get_sub_epoch_config(&env, &asset)
+    }
+
+    /// technical-doc.md Section 5.9 S1, 12.1: read-only, no auth. The
+    /// sub-epoch length in force for `hour`: the pending value from its
+    /// `effective_from_hour` on, the current value before it. The same
+    /// resolver every internal read uses, so a caller computing
+    /// sub-epoch boundaries matches the oracle exactly.
+    pub fn sub_epoch_secs_at(env: Env, asset: Address, hour: u64) -> u64 {
+        current_sub_epoch_secs(&env, &asset, hour)
     }
 
     /// technical-doc.md Section 5.9 S5, 12.1 (v1.5): read-only, no auth.
