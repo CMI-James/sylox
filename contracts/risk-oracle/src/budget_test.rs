@@ -549,6 +549,51 @@ fn budget_post_sub_signals_at_the_300s_default() {
     );
 }
 
+/// The steady state of the most frequent call: a normal 5 minute post
+/// in the middle of an hour, after the asset has been posting for a
+/// while. Every sub-epoch of hour 0 and the first seven of hour 1 are
+/// posted first, each at its own close, so the instance, `Sub(asset)`,
+/// `SubRingNewest` and the hour's `HourPostedVia` already exist; the
+/// measured post (hour 1, sub 7) is neither the asset's first post nor a
+/// finality-scan catch-up, only what a keeper does every 300 seconds.
+#[test]
+fn budget_post_sub_signals_steady_state_mid_hour() {
+    let env = Env::default();
+    let (client, asset) = setup(&env);
+    let keeper = Address::generate(&env);
+
+    let post = |hour: u64, sub: u32| {
+        env.ledger()
+            .set_timestamp(hour * 3_600 + (sub as u64 + 1) * 300);
+        client.post_sub_signals(
+            &keeper,
+            &asset,
+            &hour,
+            &sub,
+            &sub_signal_set(&env, hour, 9_900_000),
+        );
+    };
+    for sub in 0..12u32 {
+        post(0, sub);
+    }
+    for sub in 0..7u32 {
+        post(1, sub);
+    }
+    post(1, 7);
+
+    let estimate = env.cost_estimate();
+    print_resources(
+        "post_sub_signals, steady state, hour 1 sub 7 after 19 earlier posts",
+        &estimate,
+    );
+    let resources = estimate.resources();
+    assert!(
+        (resources.instructions as u64) < TX_MAX_INSTRUCTIONS / 2,
+        "must stay under 50% of tx_max_instructions ({TX_MAX_INSTRUCTIONS}); got {}",
+        resources.instructions
+    );
+}
+
 /// The worst case for `build_hour` at the 300s default: 12 sub-epochs
 /// in the hour, with the LAST one arriving as a genuine backfill (its
 /// own post happening well after its own close, inside

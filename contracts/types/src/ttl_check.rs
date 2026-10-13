@@ -2,7 +2,8 @@
 //! a contract build). Diff a ledger snapshot taken before a call with
 //! one taken after: every persistent entry of `contract` that the call
 //! created or changed must have at least `PERSISTENT_TTL_EXTEND_TO`
-//! ledgers left, and the contract's instance at least
+//! ledgers left (`HISTORY_TTL_EXTEND_TO` for the write-once history
+//! keys in `HISTORY_VARIANTS`), and the contract's instance at least
 //! `INSTANCE_TTL_EXTEND_TO`. This checks every entry actually written,
 //! not a hand-picked list that could miss one.
 //!
@@ -21,7 +22,20 @@ use soroban_sdk::xdr::{
 };
 use soroban_sdk::{Address, Env};
 
-use crate::ttl::{INSTANCE_TTL_EXTEND_TO, PERSISTENT_TTL_EXTEND_TO};
+use crate::ttl::{HISTORY_TTL_EXTEND_TO, INSTANCE_TTL_EXTEND_TO, PERSISTENT_TTL_EXTEND_TO};
+
+/// Key variants written through `ttl::set_history`, held to
+/// `HISTORY_TTL_EXTEND_TO` instead of `PERSISTENT_TTL_EXTEND_TO`. Mirrors
+/// `RiskOracle`'s own `set_history` call sites; no other contract writes
+/// a key with these names.
+pub const HISTORY_VARIANTS: &[&str] = &[
+    "Signals",
+    "HourPostedVia",
+    "SubSignals",
+    "Overturned",
+    "SubOverturned",
+    "SubRepostUsed",
+];
 
 /// One contract's entries: key XDR -> (entry data XDR, live_until,
 /// durability, is the instance, enum variant name if any).
@@ -114,9 +128,18 @@ pub fn assert_extended(
         };
         if written {
             checked += 1;
+            let history = e
+                .variant
+                .as_deref()
+                .is_some_and(|v| HISTORY_VARIANTS.contains(&v));
+            let want = if history {
+                HISTORY_TTL_EXTEND_TO
+            } else {
+                PERSISTENT_TTL_EXTEND_TO
+            };
             assert!(
-                ttl >= PERSISTENT_TTL_EXTEND_TO,
-                "{label}: persistent {:?} written with TTL {ttl} < {PERSISTENT_TTL_EXTEND_TO}",
+                ttl >= want,
+                "{label}: persistent {:?} written with TTL {ttl} < {want}",
                 e.variant
             );
         }

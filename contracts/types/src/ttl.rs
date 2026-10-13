@@ -69,3 +69,37 @@ where
     storage.set(key, val);
     storage.extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
 }
+
+/// Write-once history entries (`RiskOracle`'s `Signals`, `HourPostedVia`,
+/// `SubSignals`, `Overturned`, `SubOverturned`, `SubRepostUsed`): extend
+/// to 30 days, technical-doc.md Section 15.2's own lifetime for
+/// `Signals`. Not the network minimum: a fresh entry there gets about 7
+/// days, against the 2 hour dispute window plus the 6 day ruling window
+/// a disputed entry must outlive, the thin margin deploy/README.md warns
+/// about. Not the 365 day persistent target either: these entries are
+/// created on every post, so a year of prepaid rent per post is the one
+/// cost this policy must not add. Older history lives in the indexer and
+/// the inputs bundles.
+pub const HISTORY_TTL_EXTEND_TO: u32 = 518_400;
+/// ... re-extended on a later write only once less than 20 days remain.
+/// Every live read of a history entry happens within about 12.3 days of
+/// its write (the worst case: one contested sub-epoch going through two
+/// full dispute cycles before its hour builds, Section 5.9 S2), so 20
+/// days left at any write already covers every use with margin. The
+/// same 20 days as `INSTANCE_TTL_THRESHOLD`, so a rewrite (for example
+/// `HourPostedVia` on each sub-epoch post of the same hour) pays for an
+/// extension at most once every 10 days rather than on every call.
+pub const HISTORY_TTL_THRESHOLD: u32 = 345_600;
+
+/// Writes a write-once history entry and extends it with the
+/// `HISTORY_TTL_*` constants (30 days), not the 365 day persistent
+/// target `set_persistent` uses.
+pub fn set_history<K, V>(env: &Env, key: &K, val: &V)
+where
+    K: IntoVal<Env, Val>,
+    V: IntoVal<Env, Val>,
+{
+    let storage = env.storage().persistent();
+    storage.set(key, val);
+    storage.extend_ttl(key, HISTORY_TTL_THRESHOLD, HISTORY_TTL_EXTEND_TO);
+}

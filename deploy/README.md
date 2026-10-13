@@ -322,12 +322,16 @@ enumerating every epoch or hour ever posted would make this script's
 own cost grow forever, instead of staying flat. A history key ages out
 on its own and is individually restorable later if something rare (a
 dispute, an audit) ever needs it again; that is an acceptable cost
-here, not a live-read outage. The margin backing that call is thin: a
-fresh history entry starts with about 7 days of TTL, and the longest a
-live call needs one is the 2h dispute window plus the 6 day ruling
-window (`SIGNAL_DISPUTE_RULING_SECS` = 518,400s) - about 22 hours of
-slack. This script does not widen that margin; only the real fix
-(extend on write, through `upgrade()`) can make it unnecessary.
+here, not a live-read outage. On the live contracts the margin
+backing that call is thin: a fresh history entry starts with about 7
+days of TTL, and the longest a live call needs one is the 2h dispute
+window plus the 6 day ruling window (`SIGNAL_DISPUTE_RULING_SECS` =
+518,400s) - about 22 hours of slack. The contract code now removes it:
+every write-once history key (`Signals`, `HourPostedVia`, `SubSignals`,
+`Overturned`, `SubOverturned`, `SubRepostUsed`) is extended to 30 days
+on write (technical-doc.md Section 15.2). The live contracts get that
+through `upgrade()`; this script does not widen the margin, and stays
+until then.
 
 **Token balances: every one of our own contracts x every token, never
 a classic account's.** A SAC's `Balance(Address)` key is a real

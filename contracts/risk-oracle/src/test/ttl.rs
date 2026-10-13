@@ -214,3 +214,53 @@ fn sub_epoch_posting_disputes_and_build_hour_extend_what_they_touch() {
     });
     assert!(fx.client.is_final(&fx.asset, &hour));
 }
+
+/// A disputed `Signals(asset, epoch)` written with the history policy
+/// (30 days) is still live when its ruling deadline arrives: the 2 hour
+/// dispute window plus the 6 day `SIGNAL_DISPUTE_RULING_SECS`, measured
+/// in ledgers at `SECONDS_PER_LEDGER`. At the network minimum (about 7
+/// days) that margin would be under a day.
+#[test]
+fn a_disputed_history_entry_is_still_live_at_its_ruling_deadline() {
+    use soroban_sdk::testutils::storage::Persistent as _;
+    use sylox_types::ttl::HISTORY_TTL_EXTEND_TO;
+
+    let env = Env::default();
+    let fx = setup(&env);
+    fx.client
+        .add_asset(&asset_config(&env, &fx.asset, &fx.issuer));
+    post(&env, &fx, 5);
+    let key = crate::storage::DataKey::Signals(fx.asset.clone(), 5);
+    let ttl = || -> u32 {
+        env.as_contract(&fx.client.address, || {
+            env.storage().persistent().get_ttl(&key)
+        })
+    };
+    assert_eq!(
+        ttl(),
+        HISTORY_TTL_EXTEND_TO,
+        "history keys get 30 days, not 365"
+    );
+
+    fx.client
+        .dispute_signals(&Address::generate(&env), &fx.asset, &5, &hash(&env, 9));
+    let deadline_secs = crate::SIGNAL_DISPUTE_SECS + crate::SIGNAL_DISPUTE_RULING_SECS;
+    let deadline_ledgers = (deadline_secs / crate::SECONDS_PER_LEDGER) as u32;
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + deadline_ledgers);
+    env.ledger()
+        .set_timestamp(time_at_epoch(5) + crate::SIGNAL_DISPUTE_RULING_SECS + 1);
+
+    assert!(
+        ttl() > 0,
+        "Signals must still be live at the ruling deadline"
+    );
+    assert!(
+        ttl() >= HISTORY_TTL_EXTEND_TO - deadline_ledgers,
+        "nothing else shortened it"
+    );
+    // MockGovernor's committee is temporary storage (test setup only).
+    MockGovernorClient::new(&env, &fx.governor).set_committee(&fx.committee);
+    fx.client.resolve_signal_dispute_timeout(&fx.asset, &5);
+    assert!(fx.client.is_final(&fx.asset, &5));
+}

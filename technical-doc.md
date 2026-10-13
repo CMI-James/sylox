@@ -2070,6 +2070,9 @@ Funds sit only where the "Holds funds?" column of Section 3.1 says: `Series` (co
 | Contract instance and code | Indefinite | Every call; plus an ops job (Section 22) |
 | Asset config, score, ring buffer | Indefinite while asset is enabled | Every `post_signals` |
 | Individual `Signals(asset, epoch)` | 30 days | On write; history beyond that lives in the indexer and the inputs bundles |
+| `HourPostedVia(asset, hour)` (v1.5) | 30 days | On write (re-extended on a later write only below 20 days left) |
+| `SubSignals(asset, hour, sub)` (v1.5) | 30 days | On write; history beyond that lives in the indexer and the inputs bundles |
+| Overturn and repost records: `Overturned(asset, epoch)`, `SubOverturned(asset, hour, sub)`, `SubRepostUsed(asset, hour, sub)` | 30 days | On write |
 | Definitions, canonical pointers, event status | Indefinite while the asset is enabled | Every touch; ops job |
 | Event records (`EventRegistry`) and bonds (`Staking`) | 1 year after resolution | Every touch; ops job |
 | Keeper and reporter records, claimable balances (`Staking`), accrued rewards (`Treasury`) | Until withdrawn or claimed, minimum 1 year after the last change | Every touch; ops job |
@@ -2081,7 +2084,7 @@ Funds sit only where the "Holds funds?" column of Section 3.1 says: `Series` (co
 
 A claimant whose balance entry was archived can restore it with a standard restore footprint transaction before claiming. The SDK does this automatically when simulation reports an archived entry.
 
-This table's own "Extended by: every `post_signals`" claim for `RiskOracle`'s asset config, score and ring buffer describes the intended policy, not what the deployed contract does today: `RiskOracle` (like `Treasury` and `EventRegistry`) calls `extend_ttl` nowhere in its storage layer as built. Tracked separately as issue #28 (known-gap), unrelated to this revision.
+The live testnet contracts get this policy through `upgrade()` (issue #12); the `deploy/extend-ttl.sh` cron stays until then.
 
 ### 15.3 Size limits
 

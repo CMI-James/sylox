@@ -255,7 +255,7 @@ pub fn get_signals(env: &Env, asset: &Address, epoch: u64) -> Option<SignalSet> 
 }
 
 pub fn set_signals(env: &Env, asset: &Address, epoch: u64, signals: &SignalSet) {
-    sylox_types::ttl::set_persistent(env, &DataKey::Signals(asset.clone(), epoch), signals);
+    sylox_types::ttl::set_history(env, &DataKey::Signals(asset.clone(), epoch), signals);
 }
 
 /// Review item C4: moves `Signals(asset, epoch)` to the `Overturned`
@@ -267,7 +267,7 @@ pub fn set_signals(env: &Env, asset: &Address, epoch: u64, signals: &SignalSet) 
 pub fn overturn_signals(env: &Env, asset: &Address, epoch: u64) {
     let key = DataKey::Signals(asset.clone(), epoch);
     if let Some(signals) = env.storage().persistent().get::<_, SignalSet>(&key) {
-        sylox_types::ttl::set_persistent(env, &DataKey::Overturned(asset.clone(), epoch), &signals);
+        sylox_types::ttl::set_history(env, &DataKey::Overturned(asset.clone(), epoch), &signals);
         env.storage().persistent().remove(&key);
     }
 }
@@ -1453,7 +1453,7 @@ pub fn get_sub_signals(env: &Env, asset: &Address, hour: u64, sub: u32) -> Optio
 }
 
 pub fn set_sub_signals(env: &Env, asset: &Address, hour: u64, sub: u32, signals: &SignalSet) {
-    sylox_types::ttl::set_persistent(env, &DataKey::SubSignals(asset.clone(), hour, sub), signals);
+    sylox_types::ttl::set_history(env, &DataKey::SubSignals(asset.clone(), hour, sub), signals);
 }
 
 /// Section 5.9 S2 (v1.5, footprint-fix revision): one overturned
@@ -1505,7 +1505,7 @@ pub fn overturn_sub_signals(env: &Env, asset: &Address, hour: u64, sub: u32, now
         // otherwise would be.
         let already_used_its_repost = env.storage().persistent().has(&repost_used_key);
         env.storage().persistent().remove(&repost_used_key);
-        sylox_types::ttl::set_persistent(
+        sylox_types::ttl::set_history(
             env,
             &DataKey::SubOverturned(asset.clone(), hour, sub),
             &SubOverturnedRecord {
@@ -1552,13 +1552,13 @@ pub fn mark_sub_overturn_reposted(env: &Env, asset: &Address, hour: u64, sub: u3
         .get::<_, SubOverturnedRecord>(&key)
     {
         record.reposted = true;
-        sylox_types::ttl::set_persistent(env, &key, &record);
+        sylox_types::ttl::set_history(env, &key, &record);
     }
     // Tags the just-accepted repost itself, so IF it is later
     // overturned too, that overturn's own fresh record starts
     // already `reposted: true` (see `overturn_sub_signals`): the one
     // repost per original overturn rule.
-    sylox_types::ttl::set_persistent(
+    sylox_types::ttl::set_history(
         env,
         &DataKey::SubRepostUsed(asset.clone(), hour, sub),
         &true,
@@ -1744,7 +1744,7 @@ pub fn get_hour_posted_via(env: &Env, asset: &Address, hour: u64) -> Option<Hour
 }
 
 pub fn set_hour_posted_via(env: &Env, asset: &Address, hour: u64, via: HourPostedVia) {
-    sylox_types::ttl::set_persistent(env, &DataKey::HourPostedVia(asset.clone(), hour), &via);
+    sylox_types::ttl::set_history(env, &DataKey::HourPostedVia(asset.clone(), hour), &via);
 }
 
 /// Test only: flips the stored layout version so the next read is
