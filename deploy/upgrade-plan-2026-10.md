@@ -4,18 +4,13 @@ Docs-only. Nothing in this file has been run. Every command below is
 written to be copy-pasted when the go-ahead comes, not executed while
 writing this.
 
-## Correction to this file's own first draft
+## The live contracts already have `upgrade()`
 
-The first draft of this plan said the live testnet contracts had no
-`upgrade()` at all and needed a one-time fresh redeploy before any of
-this could run. That was wrong, caught before anything was run:
 `deployments/testnet.json`'s own `git_commit` is `9dbeba7`, which
 includes PR #63 ("Add upgrade(), version(), migrate() to all four
-core contracts", issue #12, merged 2026-10-11T04:53:29Z) - and the
-real testnet deploy (`deployed_at`: 2026-10-11T15:00:08Z) happened
-over 10 hours AFTER that merge. The `deploy/README.md` note this
-first draft relied on was written before that redeploy and never
-updated; it has been fixed in this same PR.
+core contracts", issue #12, merged 2026-10-11T04:53:29Z) - the real
+testnet deploy (`deployed_at`: 2026-10-11T15:00:08Z) happened over 10
+hours after that merge.
 
 Verified directly against the live chain, not assumed:
 
@@ -35,10 +30,9 @@ Verified directly against the live chain, not assumed:
 So `upgrade()`, `version()`, and `migrate()` genuinely work on the
 live contracts today. This plan is Part B only - the real,
 repeatable `upgrade()`/`migrate()` procedure, usable right now. The
-fresh-redeploy procedure the first draft centered on is kept, at the
-very end, as an appendix for the situation it actually applies to (a
-change that needs a brand new contract address outright), not as
-something blocking this plan.
+fresh-redeploy procedure is kept, at the very end, as an appendix for
+the situation it actually applies to (a change that needs a brand new
+contract address outright), not as something blocking this plan.
 
 ## Steps, per contract (RiskOracle, EventRegistry, Staking, Treasury)
 
