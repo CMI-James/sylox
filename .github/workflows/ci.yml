@@ -201,6 +201,34 @@ jobs:
       - name: Prove demo_build() is false in that exact wasm
         run: cargo test -p risk-oracle --lib -- --ignored release_wasm
 
+  demo-time-build:
+    name: demo-time feature (per package, not the general test suite)
+    runs-on: ubuntu-latest
+    # The general test suite (the `test` job above) checks real-world
+    # timing on purpose and is never meant to run under demo-time: its
+    # fixtures hardcode real EPOCH_SECS/SUB_EPOCH_GRID_SECS values and
+    # fail by design once those are scaled. This job instead checks the
+    # two things that actually matter for a demo deployment: every
+    # contract deploy/deploy.sh testnet-demo builds and deploys still
+    # compiles with the feature on, and the handful of tests written
+    # specifically for demo-time (not incidentally run under it) still
+    # pass. The two adapter crates are left out: deploy/deploy.sh
+    # testnet-demo never builds or deploys them.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable branch, 2026-10-08
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build every contract the demo deploys, with demo-time on
+        run: |
+          for crate in risk-oracle staking treasury event-registry market-factory series; do
+            echo "cargo build -p $crate --features demo-time"
+            cargo build -p "$crate" --features demo-time
+          done
+      - name: sylox-types constants regression test, with demo-time on
+        run: cargo test -p sylox-types --features demo-time
+      - name: demo_build() reads true, with demo-time on
+        run: cargo test -p risk-oracle --features demo-time demo_build_is_true_with_the_demo_time_feature
+
   web:
     name: web workspace (typecheck, lint, test, build)
     runs-on: ubuntu-latest
