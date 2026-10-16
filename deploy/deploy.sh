@@ -462,7 +462,31 @@ $out"
   # (see this section's own header comment); this loop only ever
   # covers the 72 epochs the backfill window itself allows for free,
   # real transaction time, not real epoch-boundary waiting.
-  SEED_EPOCH=$(( $(date -u +%s) / EPOCH_SECS - WINDOW_SECS / EPOCH_SECS ))
+  # Starts 2 epochs inside the window, not at its own edge: a real
+  # testnet-demo run once hit Error(Contract, #102) WrongEpoch on the
+  # very first post_signals below, because starting exactly at the
+  # edge (now/EPOCH_SECS - WINDOW_SECS/EPOCH_SECS, no margin) leaves as
+  # little as 1 second of real slack against check_epoch_window's own
+  # WINDOW_SECS bound, depending on exactly which second within its
+  # own minute this line happens to run - comfortably less than a real
+  # CLI/RPC simulate round trip takes. +2 epochs (120s) ensures at
+  # least 60s of margin no matter where in the minute this lands, with
+  # no waiting needed.
+  compute_seed_epoch() {
+    local now="$1" epoch_secs="$2" window_secs="$3"
+    echo $(( now / epoch_secs - window_secs / epoch_secs + 2 ))
+  }
+  # check_epoch_window's own two bounds, mirrored here so the backfill
+  # loop can recheck SEED_EPOCH against the CURRENT time right before
+  # trusting it, rather than relying solely on the margin above.
+  seed_epoch_in_window() {
+    local epoch="$1" now="$2" epoch_secs="$3" window_secs="$4"
+    local current_epoch=$(( now / epoch_secs ))
+    (( epoch < current_epoch )) || return 1
+    local epoch_close=$(( (epoch + 1) * epoch_secs ))
+    (( now - epoch_close <= window_secs ))
+  }
+  SEED_EPOCH="$(compute_seed_epoch "$(date -u +%s)" "$EPOCH_SECS" "$WINDOW_SECS")"
   # check_issuer_freeze's own freeze_pct_bps threshold (100, 1%) is
   # clawback_sum * 10,000 / latest_supply - this reported SUPPLY must
   # stay in proportion to the real DMFRZ amounts scenario.sh's own
@@ -553,6 +577,15 @@ $post_out"
   # STALE_AFTER_EPOCHS (3) of real time - converges because posting
   # one epoch (a few real seconds) is faster than one epoch closing
   # (EPOCH_SECS, 60 real seconds).
+  # Rechecks SEED_EPOCH against the CURRENT time right before trusting
+  # it for the very first post: add_asset, register_definition and
+  # set_related_sellers above each cost a real transaction between
+  # computing it and reaching here, so recompute instead of ever
+  # failing on this specific check.
+  if ! seed_epoch_in_window "$SEED_EPOCH" "$(date -u +%s)" "$EPOCH_SECS" "$WINDOW_SECS"; then
+    log "SEED_EPOCH $SEED_EPOCH fell outside the window before the first post - recomputing"
+    SEED_EPOCH="$(compute_seed_epoch "$(date -u +%s)" "$EPOCH_SECS" "$WINDOW_SECS")"
+  fi
   next_to_post=$SEED_EPOCH
   while true; do
     newest_closed=$(( $(date -u +%s) / EPOCH_SECS - 1 ))

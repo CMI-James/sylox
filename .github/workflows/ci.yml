@@ -109,6 +109,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash deploy/test-demo-asset-trigger-one-gate-per-step.sh
 
+  seed-epoch-test:
+    name: deploy.sh testnet-demo compute_seed_epoch margin regression test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash deploy/test-seed-epoch.sh
+
   test:
     name: cargo test --workspace
     runs-on: ubuntu-latest

@@ -434,8 +434,18 @@ $out"
 }
 
 log "[3/9] Building RiskOracle's real 168-epoch history for DMFRZ (this is the slow step; see this script's own header comment)"
+# Mirrors deploy.sh testnet-demo's own compute_seed_epoch(): the oldest
+# epoch check_epoch_window currently allows, 2 epochs inside its own
+# WINDOW_SECS bound rather than right at the edge - see that function's
+# own comment for why (a real testnet-demo run once hit Error(Contract,
+# #102) WrongEpoch from exactly this margin being as little as 1
+# second, depending on the minute's own seconds).
+compute_seed_epoch() {
+  local now="$1" epoch_secs="$2" window_secs="$3"
+  echo $(( now / epoch_secs - window_secs / epoch_secs + 2 ))
+}
 now_epoch=$(( $(date -u +%s) / EPOCH_SECS ))
-backfill_floor=$(( now_epoch - WINDOW_SECS / EPOCH_SECS ))
+backfill_floor="$(compute_seed_epoch "$(date -u +%s)" "$EPOCH_SECS" "$WINDOW_SECS")"
 backfill_start=$(( SEED_EPOCH + 1 ))
 (( backfill_start < backfill_floor )) && backfill_start=$backfill_floor
 for ((epoch = backfill_start; epoch < now_epoch; epoch++)); do
