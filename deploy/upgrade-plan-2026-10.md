@@ -4,191 +4,43 @@ Docs-only. Nothing in this file has been run. Every command below is
 written to be copy-pasted when the go-ahead comes, not executed while
 writing this.
 
-## The real starting point: the live contracts cannot be upgraded yet
+## Correction to this file's own first draft
 
-This has to come first, because it changes what "upgrade RiskOracle,
-EventRegistry, Staking and Treasury in place" actually means today.
+The first draft of this plan said the live testnet contracts had no
+`upgrade()` at all and needed a one-time fresh redeploy before any of
+this could run. That was wrong, caught before anything was run:
+`deployments/testnet.json`'s own `git_commit` is `9dbeba7`, which
+includes PR #63 ("Add upgrade(), version(), migrate() to all four
+core contracts", issue #12, merged 2026-10-11T04:53:29Z) - and the
+real testnet deploy (`deployed_at`: 2026-10-11T15:00:08Z) happened
+over 10 hours AFTER that merge. The `deploy/README.md` note this
+first draft relied on was written before that redeploy and never
+updated; it has been fixed in this same PR.
 
-`deploy/README.md`'s own "Upgrading a contract (issue #12)" section
-states it directly: the contracts currently deployed to testnet
-(`deployments/testnet.json`) **do not have `upgrade()` at all**.
-`upgrade()`, `version()`, and `migrate()` were added to the four core
-contracts' source in a later change than the one that's actually
-live. Calling `stellar contract invoke ... -- upgrade` against the
-real, currently-deployed `RiskOracle`/`EventRegistry`/`Staking`/
-`Treasury` addresses in `deployments/testnet.json` will fail: that
-function does not exist in the WASM those addresses are running.
+Verified directly against the live chain, not assumed:
 
-So "upgrade in place, keeping their addresses and history" is not
-available as a first move. The only path to an `upgrade()`-capable
-testnet is the one-time fresh redeploy the README already describes
-(new addresses, via the constructor flow), after which real
-`upgrade()`/`migrate()` calls become possible for every fix after
-that. This plan is written in two parts to make that honest:
+- `version()` on all four live contracts answers `1` today
+  (RiskOracle, EventRegistry, Staking, Treasury).
+- A fresh build of `9dbeba7`, done in an isolated worktree, produces
+  the exact same WASM hash as each contract's own `wasm_hash` already
+  recorded in `deployments/testnet.json`:
 
-- **Part A** is the one-time fresh redeploy that makes `upgrade()`
-  exist at all on testnet, run once.
-- **Part B** is the real, repeatable `upgrade()`/`migrate()`
-  procedure this plan was asked to produce, usable on every future
-  fix once Part A has happened.
+  | Contract | Live `wasm_hash` | Fresh build of `9dbeba7` |
+  |---|---|---|
+  | RiskOracle | `0f85f867...` | `0f85f867...` (match) |
+  | Staking | `c532f2a1...` | `c532f2a1...` (match) |
+  | Treasury | `7f654b40...` | `7f654b40...` (match) |
+  | EventRegistry | `dcf56fcf...` | `dcf56fcf...` (match) |
 
-Nothing below runs without an explicit go-ahead. Part A in
-particular is destructive to the current deployment's own history
-(spelled out under "What is lost," below) and is not something this
-plan recommends doing lightly just to unblock this task.
+So `upgrade()`, `version()`, and `migrate()` genuinely work on the
+live contracts today. This plan is Part B only - the real,
+repeatable `upgrade()`/`migrate()` procedure, usable right now. The
+fresh-redeploy procedure the first draft centered on is kept, at the
+very end, as an appendix for the situation it actually applies to (a
+change that needs a brand new contract address outright), not as
+something blocking this plan.
 
-## Part A: the one-time fresh redeploy (makes `upgrade()` exist)
-
-This is `deploy/README.md`'s own "The live contracts cannot be
-upgraded yet" sequence, restated here with the exact command and
-verification for each step.
-
-1. **Fresh deploy of the four core contracts.**
-   ```
-   deploy/deploy.sh testnet
-   ```
-   Signs with `sylox-testnet-deployer` (and funds/creates
-   `sylox-testnet-admin`, `sylox-testnet-issuer`,
-   `sylox-testnet-keeper` if they don't already exist). Before
-   running: bump `CONSTRUCTOR_NONCE` in `deploy/deploy.sh` from its
-   current value, `"sylox-v1"` (read from
-   `deployments/testnet.json`'s own `constructor_nonce` field), to
-   something new - the script refuses to run if any precomputed
-   address under the old nonce already has a contract, which the
-   current nonce always triggers.
-
-   **Check it worked:** the script itself fails loudly on any
-   deployment error (it's not silent on failure). After it finishes,
-   confirm each of the four addresses in the fresh
-   `deployments/testnet.json` responds to `version()`:
-   ```
-   stellar contract invoke --id <risk_oracle.id> --source-account sylox-testnet-admin \
-     --network testnet --send=no -- version
-   ```
-   repeated for `event_registry`, `staking`, `treasury`. Each must
-   return `1` (RiskOracle/Staking/Treasury) or `2` (EventRegistry) -
-   confirms the fresh deploy is running code that actually has
-   `upgrade()`/`version()`/`migrate()` (the old deployed code has no
-   `version()` to call at all, so this check also doubles as proof
-   the new addresses are live, not the old ones).
-
-2. **71 hour USDC backfill.**
-   ```
-   deploy/post-demo-signals.sh testnet 71
-   ```
-   Signs with `sylox-testnet-keeper`. Must run before
-   `deploy/smoke-testnet.sh` (see that file's own "Why the order
-   matters" section - the smoke test's own checks assume real
-   backfilled history exists).
-
-   **Check it worked:**
-   ```
-   stellar contract invoke --id <risk_oracle.id> --source-account sylox-testnet-admin \
-     --network testnet --send=no -- first_epoch --asset <usdc_contract_id>
-   ```
-   should read back the oldest backfilled hour; `newest_epoch` should
-   read back the most recent closed hour the backfill posted.
-
-3. **DEMOUSD, from scratch.**
-   ```
-   deploy/demo-asset.sh testnet
-   deploy/demo-asset-trigger.sh testnet
-   # wait for the triggering signal's own dispute window to pass
-   deploy/demo-asset-propose.sh testnet
-   ```
-   `demo-asset-trigger.sh` is explicitly not meant to be re-run
-   against an existing holder (see its own header) - this produces a
-   fresh holder, a fresh mint, a fresh real revocation/clawback.
-   `demo-asset-trigger.sh` itself prints the real time its own
-   triggering signal becomes effectively Final; wait until then
-   before the `propose` step, same as the original run this session
-   already did once.
-
-   **Check it worked:** read `EventRegistry.event(0)` after `propose`
-   and after `finalize` (the same `demo-asset-propose.sh` output
-   already reports this); confirm `RiskOracle.band(<demo_id>)` reads
-   `"Event"`.
-
-4. **TTL entries, once, by hand.**
-   ```
-   deploy/extend-ttl.sh testnet
-   ```
-   Signs with `sylox-testnet-keeper`. Run once, right after steps 2
-   and 3, since every tracked entry on a brand-new deploy starts with
-   a short TTL (the original issue #28 measurement found this).
-
-   **Check it worked:** the script's own `ttl: checked N, extended M
-   [...]` log line; confirm `M > 0` the first time it runs on fresh
-   state (nothing should read as already long-lived yet).
-
-5. **The live poster's baked-in deployment record.**
-   Push the fresh `deployments/testnet.json` to the branch that
-   `deploy/Dockerfile.live-poster`'s own `COPY` reads from, open a
-   PR, get it merged. The Railway cron service bakes this file in at
-   build time, so a new CI run has to actually ship before
-   `sylox-live-poster`'s next scheduled tick posts against the new
-   addresses.
-
-   **Check it worked:** `railway logs --deployment` after the next
-   scheduled run; confirm the log's own contract IDs match the fresh
-   `deployments/testnet.json`, not the old addresses.
-
-6. **Web app bindings.**
-   ```
-   node web/app/scripts/generate-bindings.mjs
-   ```
-   against the new contract IDs; commit; redeploy `sylox-app`.
-
-**Before any of the above runs:** record the current (soon to be
-orphaned) event 0's details somewhere durable - event id, the
-`propose_tier1`/`finalize` transaction links, the revocation and
-clawback transaction links. `docs/demousd-issuer-freeze-2026-10-11.md`
-already has every one of these from the real run this session
-produced; confirm that file is complete and merged before Part A
-runs, since this is the last point at which the current `EventRegistry`
-address is still the live one.
-
-**What is lost, with no way to carry it forward (quoting
-`deploy/README.md` directly, since this is the real, already-written
-answer, not something new):**
-
-- `EventRegistry` event 0 and its finalize history - the real DEMOUSD
-  IssuerFreeze event. `NextEventId` starts back at 0 on the fresh
-  contract; the old event's id, ruling/cure history, and the real
-  transaction trail are no longer reachable through `event(id)` on
-  the new address (still findable on stellar.expert against the OLD
-  address, for as long as that address and its own history stay
-  queryable).
-- DEMOUSD's current state - the holder's remaining balance, the
-  issuer's clawback/revocation history, all tied to the OLD
-  `EventRegistry`/`RiskOracle` addresses DEMOUSD was registered
-  against. Step 3 above is a full reset, not a migration.
-- USDC's scoring progress - `FirstEpoch`, the ring buffer's
-  accumulated history, `NewestFinal`, all reset to nothing on the new
-  `RiskOracle` address. The 7 day score baseline starts counting from
-  zero again from whenever the fresh backfill (step 2) finishes.
-
-**Read-only finding from this session's own Oct 16 check, relevant
-here:** USDC's score has not appeared on the CURRENT live deployment
-either, for a separate, already-diagnosed reason - see "The live
-poster has a real gap" below. That gap would also affect USDC's
-scoring on the fresh deployment unless fixed first, so fixing it (or
-at minimum calling `build_hour` by hand on a schedule) belongs in the
-same conversation as this redeploy, not treated as unrelated.
-
-## Part B: the real `upgrade()`/`migrate()` procedure (once Part A has happened)
-
-This is the procedure this plan was actually asked to produce,
-usable for every upgrade after Part A, including the TTL-policy fix
-(#89), the sub-epoch fix (#93/#95), and the buy_cover fix (#91) all
-landing on the FRESH contracts for the first time (since the fresh
-deploy in Part A would be built from current `main`, these three are
-already baked into the WASM Part A deploys - this Part B procedure
-would only be exercised for the NEXT fix after that, or if Part A and
-these fixes are deliberately kept separate so this procedure gets a
-real, low-stakes first run).
-
-### Steps, per contract (RiskOracle, EventRegistry, Staking, Treasury)
+## Steps, per contract (RiskOracle, EventRegistry, Staking, Treasury)
 
 1. **Build and upload the new WASM.**
    ```
@@ -258,13 +110,12 @@ cross-contract call signature between these four - `buy_cover`'s new
 signature is on `Series`, not one of these four, and `Series` is not
 in this upgrade's scope).
 
-### Then: deploy MarketFactory and call `set_factory`
+## Then: deploy MarketFactory and call `set_factory`
 
 `MarketFactory` has never been deployed to testnet. Its constructor
-needs the FRESH `oracle`/`registry`/`treasury` addresses (and `usdc`,
-unchanged across Part A) as arguments, so it can only be deployed
-after Part A (or after this contract's own fresh addresses exist,
-whichever redeploy they come from):
+needs the CURRENT, real `oracle`/`registry`/`treasury` addresses (the
+same ones from `deployments/testnet.json` today, unchanged by the
+steps above, since `upgrade()` keeps the same address) and `usdc`:
 
 ```
 stellar contract deploy --wasm target/wasm32v1-none/release/market_factory.wasm \
@@ -290,8 +141,8 @@ stellar contract invoke --id <event_registry id> --source-account sylox-testnet-
   --network testnet -- set_factory --factory <market_factory id>
 ```
 Signs with `sylox-testnet-admin` (governor-gated). This setter does
-not exist on the EventRegistry code deployed by Part A alone - it
-ships with the SAME EventRegistry upgrade that wires the real
+not exist on the EventRegistry code currently live - it ships with
+the SAME EventRegistry upgrade that wires the real
 `version_has_live_cover` cross-contract calls (per
 `deploy/README.md`'s own note: "No governor-only `set_factory` setter
 was added in the #12/#21 redeploy... landing together with the code
@@ -323,7 +174,7 @@ exact file directly: `Env::from_snapshot_file(path)` reads a
 real test `Env` - confirmed from the SDK's own source
 (`src/env.rs`), not assumed.
 
-New test, one per contract, added BEFORE Part B runs for real:
+New test, one per contract, added BEFORE these upgrades run for real:
 
 ```rust
 #[test]
@@ -369,10 +220,10 @@ deployed, anything else that only shows up in real accumulated state)
 and what the new code's types expect to read. The snapshot-loaded
 test above does.
 
-Run this for all four contracts before Part B executes for real, with
-a snapshot of EACH live contract (not just RiskOracle). If any of the
-four fails to decode, STOP - that's a real storage-compatibility
-problem Part B must not run into live.
+Run this for all four contracts before the upgrades run for real,
+with a snapshot of EACH live contract (not just RiskOracle). If any
+of the four fails to decode, STOP - that's a real storage-
+compatibility problem the real upgrade must not run into live.
 
 ### 2. Hours posted before the upgrade still resolve to the right length
 
@@ -386,7 +237,7 @@ exists, which checks the two READS agree with each other, not that a
 genuinely pre-existing hour with no `HourSubEpochSecs` record resolves
 correctly through the config fallback).
 
-New test to add before Part B:
+New test to add before this upgrade runs:
 
 ```rust
 #[test]
@@ -434,119 +285,79 @@ stays exact for any hour inside the 240-hour spacing window
 `set_sub_epoch_secs` enforces between changes. Every hour on testnet
 today predates #95's first-post write entirely (that code is not yet
 live), so EVERY currently-posted hour depends on this fallback path
-working correctly the first time Part B's upgrade goes live.
+working correctly the first time this upgrade goes live.
 
 ### 3. The live poster keeps working before, during and after the upgrade
 
-**Real finding, surfaced by writing this plan, not something assumed
-safe:** `post_signals` and `post_sub_signals` on the CURRENT, live
-RiskOracle do not have `upgrade()`-era code at all (see "The live
-contracts cannot be upgraded yet," above) - so "before" is just "the
-current state," already running and already fine. The real risk is
-"during" and "after":
+`post_signals` and `post_sub_signals`'s own interface (arguments,
+return type, error codes) is unchanged by #89/#93/#95 - confirmed by
+reading each PR's diff: #89 only adds TTL-extension calls inside
+existing functions, #93 adds a new READ (`sub_epoch_secs_at`) without
+touching `post_sub_signals`'s own signature, #95 adds an internal
+write (`HourSubEpochSecs`) inside the existing function body. The
+live poster's own script, `deploy/post-demo-signals.sh`, calls
+`post_sub_signals` with the same arguments before and after. No code
+change is needed in the poster for these three fixes to keep working.
 
-- **During Part A** (the fresh redeploy): the live poster's own
-  baked-in `deployments/testnet.json` still points at the OLD
-  addresses until step 5's CI run ships. Every scheduled tick in that
-  window keeps posting to the OLD, abandoned contracts - harmless
-  (nobody reads that history going forward) but NOT free: it still
-  spends the keeper's real testnet balance and real transaction fees
-  posting to addresses about to be orphaned. Minimize this window:
-  steps 1 through 4 should run back-to-back, with step 5's PR opened
-  immediately after step 4 finishes, not left pending.
-- **After Part A / during Part B** (an `upgrade()` on the fresh
-  contracts): `post_sub_signals`'s own interface (arguments, return
-  type, error codes) is unchanged by #89/#93/#95 - confirmed by
-  reading each PR's diff: #89 only adds TTL-extension calls inside
-  existing functions, #93 adds a new READ (`sub_epoch_secs_at`)
-  without touching `post_sub_signals`'s own signature, #95 adds an
-  internal write (`HourSubEpochSecs`) inside the existing function
-  body. The live poster's own script,
-  `deploy/post-demo-signals.sh`, calls `post_sub_signals` with the
-  same arguments before and after. No code change is needed in the
-  poster for these three fixes to keep working.
+**The check:** watch the live poster's own log
+(`railway logs --deployment`) across the `upgrade()` + `migrate()`
+call for each contract. Confirm the next scheduled tick AFTER each
+contract's own upgrade still posts successfully (`live: posted N
+sub-epoch(s)...`, no new error). Do this per contract, not just once
+at the end - if RiskOracle's own upgrade breaks something, we want to
+know before EventRegistry's upgrade runs too.
 
-  **The check:** watch the live poster's own log
-  (`railway logs --deployment`) across the `upgrade()` + `migrate()`
-  call for each contract. Confirm the next scheduled tick AFTER each
-  contract's own upgrade still posts successfully (`live: posted N
-  sub-epoch(s)...`, no new error). Do this per contract, not just
-  once at the end - if RiskOracle's own upgrade breaks something, we
-  want to know before EventRegistry's upgrade runs too.
-
-- **A real, separate gap found while writing this plan, not
-  introduced by this upgrade:** USDC's hourly `Signals` slot has not
-  advanced past epoch 497700 since the current deployment went live
-  (confirmed via `is_final` reading `false` for every hour after
-  497700, and `build_hour` simulating successfully but with
-  `sub_count_final: 0` for hours old enough that the 5-hour sub-epoch
-  ring has rotated past their raw data). Root cause: the live
-  poster's own script never calls `build_hour`; it relies entirely on
-  `post_sub_signals`'s own one-shot inline attempt, which almost
-  always runs too early (most of an hour's own sub-epochs are still
-  inside their 2-hour `SIGNAL_DISPUTE_SECS` pending window at the
-  moment the 12th sub posts). This means USDC's score has never
-  advanced past `stale: true, score: 0` on the current deployment,
-  independent of anything in this upgrade. **Recommendation, not yet
-  acted on:** fix this (either have the poster call `build_hour`
-  explicitly on a short delay after an hour completes, or add a
-  scheduled call to it) BEFORE or ALONGSIDE this upgrade, since Part
-  A's fresh redeploy would otherwise carry this exact gap forward
-  into the new deployment too, and USDC would again never produce a
-  real score.
+**A real, separate gap found while writing this plan, now fixed in a
+separate PR (`fix/poster-build-hour`), not part of this upgrade's own
+scope:** USDC's hourly `Signals` slot had not advanced past epoch
+497700 since the current deployment went live. Root cause: the live
+poster's own script never called `build_hour`; it relied entirely on
+`post_sub_signals`'s own one-shot inline attempt, which almost always
+ran too early. That fix is independent of this upgrade and does not
+block it - noted here only so this upgrade's own live-poster check
+(above) is read against a poster that is already building hours
+correctly, not the broken one that produced this finding.
 
 ### 4. `extend-ttl.sh`'s cron only runs after the new code is live and verified
 
 `extend-ttl.sh` (the Railway cron service, issue #28's own stopgap)
-reads real, current contract addresses from whatever
-`deployments/testnet.json` its own deployed image was built against -
-same baked-in-at-build-time mechanism as the live poster (see Part A
-step 5). Concretely:
+is still the ONLY thing keeping these four contracts' storage alive
+today, since #89's own TTL-extension code has not landed via
+`upgrade()` yet. After `upgrade()` + `migrate()` land, the contracts
+extend their own storage on every write - the external cron becomes
+a redundant safety net, not the sole mechanism, but it should NOT be
+turned off immediately: confirm the new code's own extension behavior
+for real first.
 
-- During Part A, `extend-ttl.sh`'s cron keeps extending TTLs on the
-  OLD contracts until its own image is redeployed against the new
-  `deployments/testnet.json` - same "harmless but wasted spend" risk
-  as the live poster's own gap above, same fix (minimize the window
-  between steps 1-4 and shipping step 5/6).
-- For Part B (`upgrade()` on the fresh contracts): #89's own TTL
-  policy (the subject of this upgrade) changes WHAT `extend-ttl.sh`
-  needs to do, not just what the contracts do internally. Before
-  #89's code is live via `upgrade()`, the external cron is still the
-  ONLY thing keeping these four contracts' storage alive (the gap
-  issue #28 opened against). After `upgrade()` + `migrate()` land,
-  the contracts extend their own storage on every write - the
-  external cron becomes a redundant safety net, not the sole
-  mechanism, but it should NOT be turned off immediately: confirm
-  the new code's own extension behavior for real first.
-
-  **The check, explicit and sequenced, matching the literal ask -
-  "only after the new code is live and verified":**
-  1. Run Part B's `upgrade()` + `migrate()` on all four contracts.
-  2. Let at least one real write happen on each contract through
-     normal operation (the live poster's own next tick covers
-     RiskOracle; `demo-asset-propose.sh`/a manual EventRegistry call
-     covers EventRegistry; Staking/Treasury need a real
-     reward/deposit cycle, or a manual state-changing call made
-     specifically to exercise this).
-  3. Read back that entry's own TTL (`stellar contract invoke ...
-     --send=no` doesn't expose a raw TTL read today - the practical
-     proxy is `extend-ttl.sh`'s OWN `ttl: checked N, extended M
-     [...]` log line: if the new code is extending correctly, M
-     should read 0 for entries the new code JUST wrote, since they
-     already have a fresh TTL and the cron's own sweep has nothing
-     left to do for them).
-  4. Only once step 3 confirms the new code is actually extending
-     (not just deployed), treat `extend-ttl.sh` as the safety net it
-     was always meant to become, not the sole mechanism - this plan
-     does NOT recommend disabling the cron; #89's own PR body never
-     asked for that either, it's a belt-and-suspenders design, not a
-     handoff.
+**The check, explicit and sequenced, matching the literal ask -
+"only after the new code is live and verified":**
+1. Run the `upgrade()` + `migrate()` steps above on all four
+   contracts.
+2. Let at least one real write happen on each contract through
+   normal operation (the live poster's own next tick covers
+   RiskOracle; `demo-asset-propose.sh`/a manual EventRegistry call
+   covers EventRegistry; Staking/Treasury need a real
+   reward/deposit cycle, or a manual state-changing call made
+   specifically to exercise this).
+3. Read back that entry's own TTL (`stellar contract invoke ...
+   --send=no` doesn't expose a raw TTL read today - the practical
+   proxy is `extend-ttl.sh`'s OWN `ttl: checked N, extended M
+   [...]` log line: if the new code is extending correctly, M
+   should read 0 for entries the new code JUST wrote, since they
+   already have a fresh TTL and the cron's own sweep has nothing
+   left to do for them).
+4. Only once step 3 confirms the new code is actually extending
+   (not just deployed), treat `extend-ttl.sh` as the safety net it
+   was always meant to become, not the sole mechanism - this plan
+   does NOT recommend disabling the cron; #89's own PR body never
+   asked for that either, it's a belt-and-suspenders design, not a
+   handoff.
 
 ## Rehearsal: a full run on a throwaway deployment first
 
-Everything in Part A and Part B, run once against a completely
-separate set of identities and contract addresses, before touching
-the shared testnet setup, so a real mistake costs nothing shared.
+Everything above, run once against a completely separate set of
+identities and contract addresses, before touching the shared
+testnet setup, so a real mistake costs nothing shared.
 
 **Setup**, copying `deploy/deploy.sh`'s own real identity-naming
 convention but under different names so nothing collides with the
@@ -563,17 +374,23 @@ Copy `deploy/deploy.sh` to a scratch copy (not committed), replace
 every `sylox-testnet-*` identity name with the `sylox-rehearsal-*`
 equivalent above, and give it its own `CONSTRUCTOR_NONCE` (e.g.
 `"sylox-rehearsal-1"`) so its precomputed addresses never collide
-with the real deploy's own. Run it, and the rest of Part A's steps
-1-4, against this separate identity set, writing to a SEPARATE
-`deployments/testnet-rehearsal.json` (never the real
+with the real deploy's own. Run it and the rest of the appendix's own
+steps 2-4 (below) against this separate identity set, writing to a
+SEPARATE `deployments/testnet-rehearsal.json` (never the real
 `deployments/testnet.json`) so nothing in the real deploy record, the
-live poster's baked-in file, or any committed file is touched.
+live poster's baked-in file, or any committed file is touched. This
+gives the rehearsal its own, separate contract addresses to run the
+real upgrade steps (1-4 above, plus MarketFactory/`set_factory`)
+against - the whole point of a rehearsal is to exercise `upgrade()`
+somewhere that is not the shared deployment, so it still needs a
+deploy of its own to upgrade.
 
-Run Part B's full upgrade procedure against these rehearsal
-addresses. Run the snapshot test (requirement 1, above) against a
-REAL snapshot of this rehearsal deployment's own storage after it's
-accumulated some real history - proving the snapshot/test mechanism
-itself works end to end, not just that it's theoretically possible.
+Run the full upgrade procedure (steps 1-4, plus MarketFactory) above
+against these rehearsal addresses. Run the snapshot test (requirement
+1, above) against a REAL snapshot of this rehearsal deployment's own
+storage after it's accumulated some real history - proving the
+snapshot/test mechanism itself works end to end, not just that it's
+theoretically possible.
 
 **What the rehearsal does NOT need:** its own `sylox-live-poster` or
 `extend-ttl.sh` Railway services - running `post-demo-signals.sh`
@@ -600,16 +417,16 @@ it.
    holder change - same mechanism, different trigger: new wasm
    hashes, not a changed address, this time, but the generator reads
    `deployments/testnet.json` either way and the drift check in CI
-   catches a missed regeneration the same way it did before).
+   catches a missed regeneration the same way it did before). Contract
+   addresses do not change from the steps above (`upgrade()` keeps the
+   same address), so no address-driven regeneration is needed beyond
+   the wasm hash update to `deployments/testnet.json` itself.
 
-   Confirm `web/docs`'s own contract-reference drift check (which
-   reads `deployments/testnet.json` directly, not the SDK's generated
-   file) doesn't ALSO need regenerating - per this session's own
-   prior finding, it only needs attention when the reference reads
-   something that actually changed (contract addresses did not change
-   in Part B, since Part B upgrades in place; Part A's addresses DO
-   change, so if Part A and B are run together, this needs re-running
-   too: `npm run generate:contract-reference -w web/docs`).
+   `web/docs`'s own contract-reference drift check (which reads
+   `deployments/testnet.json` directly, not the SDK's generated file)
+   does not need attention from this upgrade specifically: per this
+   session's own prior finding, it only reads contract addresses, and
+   those are unchanged.
 
 2. **Update docs.sylox.xyz - the integration guide must mention
    `max_premium`.**
@@ -637,48 +454,12 @@ it.
    is good evidence to link if a "why" is wanted).
 
 3. **Update `deployments/testnet.json`.**
-   Already covered per-contract in Part B step 4 above; restated here
-   as the explicit "after" checklist item since it's easy to do
-   per-contract and forget as a final whole-file commit.
+   Already covered per-contract in step 4 above; restated here as the
+   explicit "after" checklist item since it's easy to do per-contract
+   and forget as a final whole-file commit.
 
 ## Rollback: what we do if a step fails partway through
 
-**Part A (fresh redeploy):**
-- If `deploy/deploy.sh` itself fails partway (e.g. contract 3 of 4
-  deploys, contract 4 fails): the script's own constructor-flow
-  design (every address precomputed before any contract deploys)
-  means a partial run leaves some addresses deployed and others not,
-  under the SAME `constructor_nonce`. Do not try to resume with the
-  same nonce - fix whatever failed, bump `CONSTRUCTOR_NONCE` again,
-  and re-run the whole script. The old live contracts are completely
-  untouched by a failed fresh-deploy attempt (different addresses
-  entirely), so there is no live-service impact from a failed Part A
-  attempt - the real poster and TTL cron keep running against the
-  OLD, still-live addresses until Part A step 5 explicitly points
-  them elsewhere.
-- If the 71-hour backfill (step 2) fails partway: `post-demo-signals.sh`
-  is written to skip already-posted epochs on a re-run (confirmed:
-  it checks for `Error(Contract, #103)` EpochAlreadyPosted and treats
-  it as "already done," not a failure) - simply re-run the same
-  command; it resumes.
-- If DEMOUSD setup (step 3) fails partway: `demo-asset-trigger.sh`
-  already has the "one gate per step" resumability this session built
-  into it (PR #76) - re-running it is safe and will read "already
-  done" for whatever already landed. If the failure happened in
-  `demo-asset-propose.sh` specifically (after a real `propose_tier1`
-  already landed), do NOT re-run `propose_tier1` - read
-  `EventRegistry.event(0)`'s own state first; if it's already
-  `Proposed`, move directly to the `finalize` step once the challenge
-  window has passed, exactly as this session already did once for
-  real.
-- If step 5 (shipping the new `deployments/testnet.json` to the live
-  poster's image) is delayed or fails CI: the live poster keeps
-  posting to the OLD addresses harmlessly (see "during Part A,"
-  above) until it's fixed and merged - no data corruption risk, just
-  wasted spend on an abandoned deployment in the meantime.
-
-**Part B (`upgrade()`/`migrate()` on a contract that already has
-these functions):**
 - If `upgrade()` itself fails (wrong hash, governor auth fails, wasm
   upload didn't actually finish): nothing changed on-chain - Soroban
   transactions are atomic; a failed `upgrade()` call leaves the OLD
@@ -697,7 +478,7 @@ these functions):**
   has one) would otherwise run against a `MIGRATED_TO_KEY` that's one
   version behind where the code actually is.
 - If the "new code reads real storage" snapshot test (requirement 1)
-  fails for any contract BEFORE Part B runs for real on that
+  fails for any contract BEFORE the upgrade runs for real on that
   contract: STOP. Do not upgrade that contract. This is exactly the
   failure mode the test exists to catch before it happens live - fix
   whatever storage-shape mismatch the test found, re-run the test
@@ -741,13 +522,50 @@ over time. Quoting the PR body directly:
 > asset at 288 posts.
 
 **Per-asset daily cost on mainnet, taking the PR's own figure
-directly: ≈11.4 XLM/day per asset**, from `post_sub_signals` alone
-(288 calls/day = 24 hours x 12 five-minute sub-epochs/hour, the real
-cadence the live poster already runs at on testnet today).
-`post_signals`'s own hourly-fallback path, at 24 calls/day and 0.048
-XLM/post, would add roughly 1.15 XLM/day on top of that IF an asset
-were also using the hourly fallback path regularly - but the real,
-live pattern (confirmed from this session's own testnet observation)
-is sub-epoch posting for the actively-tracked asset, with the hourly
-path reserved for backfill/gap-fill, so the sub-epoch figure is the
-one that actually recurs daily in steady state.
+directly: approximately 11.4 XLM/day per asset**, from
+`post_sub_signals` alone (288 calls/day = 24 hours x 12 five-minute
+sub-epochs/hour, the real cadence the live poster already runs at on
+testnet today). `post_signals`'s own hourly-fallback path, at 24
+calls/day and 0.048 XLM/post, would add roughly 1.15 XLM/day on top
+of that IF an asset were also using the hourly fallback path
+regularly - but the real, live pattern (confirmed from this session's
+own testnet observation) is sub-epoch posting for the
+actively-tracked asset, with the hourly path reserved for
+backfill/gap-fill, so the sub-epoch figure is the one that actually
+recurs daily in steady state.
+
+## Appendix: the fresh-redeploy procedure (not needed for this upgrade)
+
+Kept for reference, for the situation it actually applies to - a
+change that needs a brand new contract address outright, not an
+in-place code upgrade. Restated from `deploy/README.md`'s own
+"Everything that needs re-running" sequence, which still applies if
+that situation ever comes up; it does not apply here, since
+`upgrade()` already works on the live contracts (see the correction
+at the top of this file).
+
+1. `deploy/deploy.sh testnet` - fresh contract addresses, fresh
+   `deployments/testnet.json`. Bump `CONSTRUCTOR_NONCE` first (the
+   script refuses to run if any precomputed address under the old
+   nonce already has a contract).
+2. The 71 hour USDC backfill (`deploy/post-demo-signals.sh testnet
+   71`), oldest first, before `deploy/smoke-testnet.sh`.
+3. DEMOUSD setup from scratch: `deploy/demo-asset.sh testnet`, then
+   `deploy/demo-asset-trigger.sh testnet`, then
+   `deploy/demo-asset-propose.sh testnet` once the triggering
+   signal's dispute window has passed.
+4. `deploy/extend-ttl.sh testnet` once, by hand, right after steps 2
+   and 3.
+5. Ship the fresh `deployments/testnet.json` to the live poster's own
+   image (a merged PR; the Railway cron service bakes this file in at
+   build time).
+6. Regenerate and redeploy the web app's own contract bindings.
+
+**What would be lost, with no way to carry it forward, if this ever
+runs:** `EventRegistry` event 0 and its finalize history (the real
+DEMOUSD IssuerFreeze event - `NextEventId` starts back at 0 on a
+fresh contract); DEMOUSD's current state (a full reset, not a
+migration); USDC's scoring progress (`FirstEpoch`, the ring buffer's
+accumulated history, `NewestFinal`, all reset to nothing on a new
+`RiskOracle` address). None of this is at risk from the real
+in-place upgrade this plan actually describes above.
