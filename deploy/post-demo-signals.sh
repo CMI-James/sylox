@@ -467,9 +467,9 @@ candidate_build_hours() {
   done
 }
 
-# Review finding (this session, a real run): post_sub_signals's own
-# inline build_hour attempt only fires once, on whichever call happens
-# to complete an hour's last sub-epoch - and that call almost always
+# post_sub_signals's own inline build_hour attempt only fires once, on
+# whichever call happens to complete an hour's last sub-epoch - and
+# that call almost always
 # lands while most of the hour's own sub-epochs are still inside their
 # 2h SIGNAL_DISPUTE_SECS pending window, so the attempt fails with
 # SubEpochNotReady and nothing ever tries again. Nobody else calls
@@ -516,9 +516,23 @@ build_recent_hours() {
     local build_out
     if build_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper \
       --network testnet -- build_hour --asset "$ASSET_ID" --hour "$hour" 2>&1)"; then
-      built=$(( built + 1 ))
-      built_list+="$hour "
-      log "build_hour($hour): built"
+      # The CLI's own exit code says the call landed, not that the
+      # hour is actually final now - re-check is_final directly
+      # before trusting it, so a call that returned success without
+      # really finishing the build (for whatever reason) can never be
+      # logged as "built" on the strength of the exit code alone.
+      local final_recheck
+      final_recheck="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper \
+        --network testnet --send=no -- is_final --asset "$ASSET_ID" --epoch "$hour" 2>&1)"
+      if [[ "$final_recheck" == "true" ]]; then
+        built=$(( built + 1 ))
+        built_list+="$hour "
+        log "build_hour($hour): built"
+      else
+        errored=$(( errored + 1 ))
+        errored_list+="$hour "
+        log "build_hour($hour): error: build_hour reported success but is_final still reads \"$final_recheck\" afterward: $build_out"
+      fi
     elif [[ "$build_out" == *"Error(Contract, #114)"* ]]; then
       not_ready=$(( not_ready + 1 ))
       not_ready_list+="$hour "
