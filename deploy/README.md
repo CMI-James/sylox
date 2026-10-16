@@ -485,18 +485,32 @@ works on any network) and landing together with the code that
 actually reads it, so it is testable against real behavior - following
 the upgrade procedure above.
 
-### The live contracts cannot be upgraded yet
+### The live contracts already have `upgrade()`
 
-The contracts already deployed to testnet (`deployments/testnet.json`)
-do not have `upgrade()` at all - adding it, like any other function
-addition, requires one more redeploy under fresh addresses before
-`upgrade()` becomes available for every fix after this one. Issue #21
-(constructor instead of `initialize`) ships in the same redeploy,
-since both need fresh contract addresses anyway - `deploy/deploy.sh`
-already uses the constructor flow described below. **Do not run this
-redeploy without an explicit go-ahead; nothing below is scheduled.**
+This section previously said the live contracts had no `upgrade()`
+and needed a fresh redeploy before the procedure above could be used
+at all. That was true when written, but is no longer: PR #63 (issue
+#12, "Add upgrade(), version(), migrate() to all four core
+contracts") merged 2026-10-11T04:53:29Z, and the testnet redeploy
+recorded in `deployments/testnet.json` (`git_commit`: `9dbeba7`,
+`deployed_at`: 2026-10-11T15:00:08Z) happened afterward and includes
+it - confirmed directly, not assumed: `version()` answers `1` on all
+four live contracts today, and a fresh build of `9dbeba7` produces
+the exact same WASM hash as each one's own `wasm_hash` in
+`deployments/testnet.json`. The procedure above (build, `upgrade`,
+verify `version()`, update the deployment record) is the real,
+usable path for every fix today - no fresh redeploy needed first.
 
-**Everything that needs re-running, in order, once approved:**
+**The fresh-redeploy procedure below is kept for the situation it
+actually applies to**: a change that needs a NEW contract address
+outright (a constructor argument shape change, for instance), not an
+in-place code upgrade. It does not apply to #12 itself anymore, and
+should not be read as a current blocker - it was one, once, and the
+note above exists so a future reader does not repeat this mistake
+from a stale comment the same way this plan's own first draft did.
+
+**Everything that needs re-running, in order, if a fresh redeploy
+is ever genuinely needed again:**
 
 1. `deploy/deploy.sh testnet` - fresh contract addresses, fresh
    `deployments/testnet.json`. Deploys through the constructor flow
