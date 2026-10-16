@@ -13,7 +13,7 @@
 # A separate, self-contained path (own section below, before
 # everything else in this file): deploys all six contracts including
 # MarketFactory and Series, built with the demo-time feature
-# (contracts/types/src/time.rs), under my own testnet identities
+# (contracts/types/src/time.rs), under the demo's own testnet identities
 # (sylox-demo-time-*, never sylox-testnet-*), writing
 # deployments/testnet-demo.json. See that section's own header comment
 # for the full scope. Nothing here touches deployments/testnet.json or
@@ -120,8 +120,8 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 # contracts (RiskOracle, Staking, Treasury, EventRegistry,
 # MarketFactory, Series - the last via MarketFactory.open_series
 # below, not deployed directly), built with the demo-time feature
-# active, under my own testnet identities (sylox-demo-time-*). Issues
-# two test-only assets: DMUSD (collateral and premiums, like TUSD
+# active, under the demo's own testnet identities (sylox-demo-time-*).
+# Issues two test-only assets: DMUSD (collateral and premiums, like TUSD
 # above) and DMFRZ (the one asset this deployment tracks, with real
 # AUTH_REVOCABLE and CLAWBACK_ENABLED issuer flags so
 # deploy/demo/scenario.sh can trigger a genuine IssuerFreeze event
@@ -219,10 +219,19 @@ if [[ "$NETWORK" == "testnet-demo" ]]; then
   GIT_COMMIT="$(cd "$REPO_ROOT" && git rev-parse HEAD)"
   log "git commit: $GIT_COMMIT"
 
-  log "[2/8] Building contracts (demo-time feature active)"
-  (cd "$REPO_ROOT" && "$STELLAR_BIN" contract build --features demo-time)
+  log "[2/8] Building contracts (demo-time feature active, own target dir)"
+  # A separate CARGO_TARGET_DIR, never the default target/wasm32v1-none/
+  # release/ deploy.sh testnet's own build (below) and CI's build-contracts
+  # job both read from: cargo and stellar contract build overwrite a fixed
+  # Wasm path per package regardless of which feature set produced it, so
+  # a demo-time build sharing that directory would silently replace the
+  # real, no-features release artifact with one that must never reach a
+  # real deployment (see RiskOracle::demo_build()). See deploy/README.md's
+  # own note on this.
+  DEMO_CARGO_TARGET_DIR="$REPO_ROOT/target/demo-time"
+  (cd "$REPO_ROOT" && CARGO_TARGET_DIR="$DEMO_CARGO_TARGET_DIR" "$STELLAR_BIN" contract build --features demo-time)
 
-  WASM_DIR="$REPO_ROOT/target/wasm32v1-none/release"
+  WASM_DIR="$DEMO_CARGO_TARGET_DIR/wasm32v1-none/release"
   declare -A DEMO_WASM_FILE=(
     [risk_oracle]="$WASM_DIR/risk_oracle.wasm"
     [staking]="$WASM_DIR/staking.wasm"
@@ -241,7 +250,7 @@ if [[ "$NETWORK" == "testnet-demo" ]]; then
     log "$name.wasm: ${DEMO_WASM_SIZE[$name]} bytes, sha256 ${DEMO_WASM_HASH[$name]}"
   done
 
-  log "[3/8] Identities (my own, never sylox-testnet-*)"
+  log "[3/8] Identities (the demo's own, never sylox-testnet-*)"
   ensure_identity() {
     local name="$1"
     if "$STELLAR_BIN" keys address "$name" >/dev/null 2>&1; then
@@ -549,8 +558,8 @@ $out"
       elif echo "$post_out" | grep -qi "Request timeout\|transaction submission timeout\|error reading a body from connection\|client error (SendRequest)\|client error (Connect)\|txBadSeq"; then
         # The same transient-vs-real distinction post-demo-signals.sh's
         # own is_transient_error already documents: a Request timeout
-        # (seen this session, during simulate itself on a long-running
-        # deploy against the public testnet RPC) is a network hiccup,
+        # (seen during simulate itself on a long-running deploy against
+        # the public testnet RPC) is a network hiccup,
         # never a real rejection, worth a short retry rather than
         # aborting the whole deployment over one flaky round trip.
         log "post_signals (epoch $epoch): transient RPC error (attempt $attempt/4), retrying"

@@ -56,9 +56,9 @@ const SIGNAL_DISPUTE_SECS: u64 = 2 * EPOCH_SECS;
 /// 144 epochs.
 const SIGNAL_DISPUTE_RULING_SECS: u64 = 144 * EPOCH_SECS;
 
-/// ADR-010 amendment: the worst-case dispute timeline —
-/// posted at the last legal instant, disputed immediately, never
-/// ruled on — must resolve (time out) before the ring wraps around
+/// ADR-010 amendment: the worst-case dispute timeline (posted at the
+/// last legal instant, disputed immediately, never ruled on) must
+/// resolve (time out) before the ring wraps around
 /// and `write_ring_slot` overwrites the still-open dispute. `+
 /// EPOCH_SECS` covers the one additional epoch that closes, and so
 /// becomes postable, in the time it takes `resolve_signal_dispute_timeout`

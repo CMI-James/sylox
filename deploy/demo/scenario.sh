@@ -373,8 +373,8 @@ fi
 #
 # A plain transient RPC error (the same narrow signature list post-
 # demo-signals.sh's own is_transient_error documents, plus "Request
-# timeout", observed this session against this exact public testnet
-# RPC): a short 3s retry, never a real rejection.
+# timeout", observed against this exact public testnet RPC): a short
+# 3s retry, never a real rejection.
 #
 # #103 (EpochAlreadyPosted) and #115 (HourAlreadyPosted, this hour
 # already posted via the sub-epoch path instead) are treated as
