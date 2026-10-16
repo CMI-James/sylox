@@ -98,8 +98,7 @@ DEMO_KEEPER=sylox-demo-time-keeper
 # this cannot just be imported. SUB_EPOCH_GRID_SECS deliberately does
 # NOT follow EPOCH_SECS's own 60x factor in the demo-time build - see
 # that module's own comment for why (a real measured write-confirm
-# round trip against testnet, and a pre-existing bug that makes
-# RiskOracle.set_sub_epoch_secs unable to fix this per asset instead).
+# round trip against testnet).
 EPOCH_SECS=60
 WINDOW_SECS=4320
 SUB_EPOCH_GRID_SECS=60
@@ -531,8 +530,18 @@ else
   # real rejection, not staleness, and must not be retried away.
   for attempt in 1 2 3; do
     post_fresh_sub_epoch
-    log "posted a fresh sub-epoch feed (hour $LAST_SUB_EPOCH_HOUR), buy_cover attempt $attempt/3"
-    if out="$(invoke_confirmed "$SERIES_ID" "$BUYER" buy_cover --buyer "$BUYER_ADDR" --amount "$BUY_AMOUNT" --max_rate_bps "$RATE_BPS")"; then
+    # buy_cover signs a fixed max_premium (Section 9.4): the premium
+    # falls every second as time_remaining shrinks, so quoting fresh on
+    # each attempt - never reusing an earlier, now-stale quote - is what
+    # keeps this from ever landing above its own signed ceiling. The
+    # contract charges the real premium and refunds the difference, so
+    # quoting exactly (no added margin) is correct, not just sufficient.
+    quote_out="$(invoke_read "$SERIES_ID" "$BUYER" premium_quote --amount "$BUY_AMOUNT" --max_rate_bps "$RATE_BPS")"
+    MAX_PREMIUM="$(echo "$quote_out" | jq -r '.[1]')"
+    [[ "$MAX_PREMIUM" =~ ^[0-9]+$ ]] || die "premium_quote returned no usable premium:
+$quote_out"
+    log "posted a fresh sub-epoch feed (hour $LAST_SUB_EPOCH_HOUR), buy_cover attempt $attempt/3 (max_premium=$MAX_PREMIUM, quoted at simulate time)"
+    if out="$(invoke_confirmed "$SERIES_ID" "$BUYER" buy_cover --buyer "$BUYER_ADDR" --amount "$BUY_AMOUNT" --max_rate_bps "$RATE_BPS" --max_premium "$MAX_PREMIUM")"; then
       break
     fi
     if (( attempt == 3 )) || ! echo "$out" | grep -qi "Error(Contract, #517)\|FeedBehind"; then

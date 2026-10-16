@@ -335,7 +335,7 @@ $out"
   log "minted $DEMO_KEEPER_BOND DMUSD to the demo keeper"
 
   log "[5/8] Precomputing contract addresses (constructor flow, deploy.sh testnet's own technique)"
-  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v12"
+  CONSTRUCTOR_NONCE_DEMO="sylox-demo-time-v13"
   salt_for_demo() {
     local contract="$1"
     echo -n "${CONSTRUCTOR_NONCE_DEMO}-${contract}" | shasum -a 256 | cut -d' ' -f1
@@ -426,17 +426,12 @@ $out"
   ASSET_CFG="{\"asset\":\"$DMFRZ_ID\",\"issuer\":\"$DEMO_ASSET_ISSUER_ADDR\",\"reference\":\"Usd\",\"home_domain\":\"example.com\",\"amm_adapters\":[],\"fx_adapter\":null,\"min_liquidity\":\"0\",\"issuer_flags\":{\"auth_revocable\":true,\"clawback_enabled\":true},\"enabled\":true}"
   invoke_demo "$RO_ID" "$DEMO_ADMIN" add_asset --cfg "$ASSET_CFG" >/dev/null
   log "RiskOracle.add_asset: DMFRZ registered"
-  # DMFRZ never calls RiskOracle.set_sub_epoch_secs: that call cannot
-  # actually widen buy_cover's own feed-freshness tolerance (a
-  # pre-existing gap in already-merged code - Series::check_feed_not_
-  # behind reads sub_epoch_config(asset).sub_epoch_secs directly,
-  # which set_sub_epoch_secs never updates, only pending_sub_epoch_
-  # secs does). DMFRZ relies on sub_epoch_config reading None (no
-  # config ever set) and falling back to SUB_EPOCH_GRID_SECS, which
-  # contracts/types/src/time.rs's own demo-time build already sizes
-  # against a real measured write-confirm round trip (see that
-  # module's own comment on why SUB_EPOCH_GRID_SECS breaks from
-  # EPOCH_SECS's own 60x factor there).
+  # DMFRZ never calls RiskOracle.set_sub_epoch_secs: the demo doesn't
+  # need it. DMFRZ relies on the implicit default (no config ever set)
+  # resolving to SUB_EPOCH_GRID_SECS, which contracts/types/src/time.rs's
+  # own demo-time build already sizes against a real measured
+  # write-confirm round trip (see that module's own comment on why
+  # SUB_EPOCH_GRID_SECS breaks from EPOCH_SECS's own 60x factor there).
 
   # freeze_pct_bps=100 (1%), auth_revocation_threshold=0: same
   # thresholds deploy/demo-asset.sh registers for DEMOUSD, so even one
