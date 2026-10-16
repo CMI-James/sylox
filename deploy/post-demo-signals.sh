@@ -548,7 +548,12 @@ build_recent_hours() {
 
     local build_out
     if build_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper \
-      --network testnet -- build_hour --asset "$ASSET_ID" --hour "$hour" 2>&1)"; then
+      --network testnet --send=yes -- build_hour --asset "$ASSET_ID" --hour "$hour" 2>&1)"; then
+      # --send=yes always submits; the CLI's own default only submits
+      # when its simulation detects ledger writes, published events,
+      # or required auth, and otherwise just returns the simulation
+      # result with exit code 0 - which would make a would-be real
+      # build look identical to a simulation-only one at this point.
       # The CLI's own exit code says the call landed, not that the
       # hour is actually Final now - classify_build_result (above)
       # decides between a real Final build, a real but below-coverage
