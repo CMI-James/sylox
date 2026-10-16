@@ -495,13 +495,46 @@ candidate_build_hours() {
 # pass, since one bad hour must never block the posting or TTL work
 # that already ran, or the next hour's own build attempt in the same
 # loop).
+# The pure half of a successful build_hour call's own classification,
+# factored out so it can be tested without a network call (deploy/
+# test-post-demo-signals-build-recent-hours.sh): given the real
+# build_hour output and the real is_final recheck's own result,
+# decides which of the three real outcomes this was. A real (not
+# simulated) build_hour call exiting 0 means the transaction landed,
+# never that the hour is now Final - build_hour can legitimately
+# build an hour down to Empty instead of Final when fewer than
+# MIN_SUB_COVERAGE_BPS (75%) of its own sub-epochs are Final
+# (contracts/risk-oracle/src/lib.rs), and is_final reads false for
+# Empty exactly like it does for a genuinely failed build (SlotState
+# has four variants - Empty, Pending, Disputed, Final - and is_final
+# only matches Final). The real transaction hash (present on every
+# genuine submission: "Signing transaction: <hash>" and the
+# stellar.expert link both carry it) is what actually tells "a real
+# transaction landed" apart from "the exit code was 0 for some other
+# reason" - is_final alone cannot, since Empty and "nothing happened"
+# both read false.
+classify_build_result() {
+  local build_out="$1" is_final_after="$2"
+  local tx_hash
+  tx_hash="$(echo "$build_out" | grep -oE '[a-f0-9]{64}' | head -1)"
+  if [[ -z "$tx_hash" ]]; then
+    echo "error"
+    return
+  fi
+  if [[ "$is_final_after" == "true" ]]; then
+    echo "built"
+  else
+    echo "built_empty"
+  fi
+}
+
 build_recent_hours() {
   local now hour_now
   now="$(date +%s)"
   hour_now=$(( now / EPOCH_SECS ))
 
-  local built=0 already_final=0 not_ready=0 errored=0
-  local built_list="" not_ready_list="" errored_list=""
+  local built=0 built_empty=0 already_final=0 not_ready=0 errored=0
+  local built_list="" built_empty_list="" not_ready_list="" errored_list=""
 
   local hour
   for hour in $(candidate_build_hours "$hour_now"); do
@@ -517,22 +550,30 @@ build_recent_hours() {
     if build_out="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper \
       --network testnet -- build_hour --asset "$ASSET_ID" --hour "$hour" 2>&1)"; then
       # The CLI's own exit code says the call landed, not that the
-      # hour is actually final now - re-check is_final directly
-      # before trusting it, so a call that returned success without
-      # really finishing the build (for whatever reason) can never be
-      # logged as "built" on the strength of the exit code alone.
-      local final_recheck
+      # hour is actually Final now - classify_build_result (above)
+      # decides between a real Final build, a real but below-coverage
+      # Empty build, or something that only looked successful.
+      local final_recheck result
       final_recheck="$("$STELLAR_BIN" contract invoke --id "$RO_ID" --source-account sylox-testnet-keeper \
         --network testnet --send=no -- is_final --asset "$ASSET_ID" --epoch "$hour" 2>&1)"
-      if [[ "$final_recheck" == "true" ]]; then
-        built=$(( built + 1 ))
-        built_list+="$hour "
-        log "build_hour($hour): built"
-      else
-        errored=$(( errored + 1 ))
-        errored_list+="$hour "
-        log "build_hour($hour): error: build_hour reported success but is_final still reads \"$final_recheck\" afterward: $build_out"
-      fi
+      result="$(classify_build_result "$build_out" "$final_recheck")"
+      case "$result" in
+        built)
+          built=$(( built + 1 ))
+          built_list+="$hour "
+          log "build_hour($hour): built"
+          ;;
+        built_empty)
+          built_empty=$(( built_empty + 1 ))
+          built_empty_list+="$hour "
+          log "build_hour($hour): WARNING - built as Empty (coverage below 75%): $build_out"
+          ;;
+        *)
+          errored=$(( errored + 1 ))
+          errored_list+="$hour "
+          log "build_hour($hour): error: build_hour reported success but no real transaction hash was found in its own output: $build_out"
+          ;;
+      esac
     elif [[ "$build_out" == *"Error(Contract, #114)"* ]]; then
       not_ready=$(( not_ready + 1 ))
       not_ready_list+="$hour "
@@ -544,7 +585,7 @@ build_recent_hours() {
     fi
   done
 
-  log "build: built $built [${built_list% }], already final $already_final, not ready $not_ready [${not_ready_list% }], errored $errored [${errored_list% }]"
+  log "build: built $built [${built_list% }], built empty $built_empty [${built_empty_list% }], already final $already_final, not ready $not_ready [${not_ready_list% }], errored $errored [${errored_list% }]"
 }
 
 if (( LIVE_MODE )); then
