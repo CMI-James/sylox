@@ -80,4 +80,8 @@ pub enum Error {
     /// `opened_at + SIGNAL_DISPUTE_RULING_SECS`. From that instant only
     /// the timeout can close the dispute.
     RulingDeadlinePassed = 118,
+    /// Governor handover (feat/set-governor-handover): `set_governor`
+    /// called a second time. One-time lock, same shape as
+    /// EventRegistry's `FactoryAlreadySet`.
+    GovernorAlreadySet = 119,
 }
