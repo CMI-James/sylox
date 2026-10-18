@@ -710,3 +710,91 @@ fn two_length_changes_in_a_row_still_pass_the_feed_check() {
         "900 in force from the next hour"
     );
 }
+
+/// `RiskOracle`'s own `STALE_AFTER_EPOCHS` (not exported; mirrors this
+/// file's own `SIGNAL_DISPUTE_SECS` comment above), the bound
+/// `MarketFactory.open_series` reads through `RiskOracle.is_stale`
+/// (`contracts/market-factory/src/lib.rs`'s own `open_series`, the
+/// real depeg-coverage gate Section 8.6 depends on), stays exactly 3
+/// through this revision: only `score()`'s own separate
+/// `SCORE_STALE_AFTER_EPOCHS` changed. Against the real, wired
+/// `MarketFactory`/`RiskOracle` (no mock on either side, unlike
+/// `series::test`'s own `buy_cover_rejects_when_asset_is_stale`,
+/// which stubs `is_stale` directly), one post, then `open_series`
+/// right at and right past the 3 epoch boundary.
+#[test]
+fn open_series_still_rejects_at_the_unchanged_is_stale_boundary_not_the_new_score_one() {
+    let env = Env::default();
+    let fx = setup(&env);
+
+    let asset_issuer = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(asset_issuer.clone())
+        .address();
+    fx.oracle
+        .add_asset(&asset_config(&env, &asset, &asset_issuer));
+    fx.registry.register_definition(&depeg_definition(&asset));
+    fx.factory
+        .set_related_sellers(&asset, &Vec::from_array(&env, [asset_issuer.clone()]));
+
+    const KEEPER_BOND: i128 = 50_000_000_000;
+    let keeper = Address::generate(&env);
+    fx.staking.add_keeper(&keeper);
+    fx.usdc_admin_client.mint(&keeper, &KEEPER_BOND);
+    fx.staking.stake(&keeper, &KEEPER_BOND);
+
+    // Only enough history for `is_stale`, same minimal pattern
+    // `a_series_with_no_buyer_still_leaves_the_live_list_and_pins_at_
+    // expiry` already uses: `open_series` only ever reads `is_stale`,
+    // never `score().stale`, so a full 168-slot ring is not needed to
+    // exercise this boundary.
+    const EPOCH_BASE: u64 = 497_000;
+    env.ledger().set_timestamp((EPOCH_BASE + 1) * EPOCH_SECS);
+    fx.oracle.post_signals(
+        &keeper,
+        &asset,
+        &signal_set(&env, &keeper, EPOCH_BASE, 9_900_000),
+    );
+    assert!(!fx.oracle.is_stale(&asset));
+
+    let mut def_versions = Map::new(&env);
+    def_versions.set(EventKind::Depeg, 1u32);
+    let make_terms = |start: u64| SeriesTerms {
+        asset: asset.clone(),
+        def_versions: def_versions.clone(),
+        settlement: fx.usdc.clone(),
+        start,
+        expiry: start + 10_000,
+        claim_window_secs: 100,
+        cap: 1,
+        max_cover_per_buyer: 1,
+        require_holding: false,
+        fee_bps: 0,
+    };
+
+    // Exactly at the 3 epoch boundary (current_epoch - EPOCH_BASE ==
+    // 3): is_stale's own condition is `> 3`, strictly greater, so this
+    // must still be fresh and open_series must still succeed.
+    env.ledger()
+        .set_timestamp((EPOCH_BASE + 3) * EPOCH_SECS + 1);
+    assert!(!fx.oracle.is_stale(&asset));
+    let now = env.ledger().timestamp();
+    let series_address = fx.factory.open_series(&make_terms(now));
+    let _ = SeriesClient::new(&env, &series_address);
+
+    // One epoch further: current_epoch - EPOCH_BASE == 4, past the 3
+    // epoch threshold, must now read stale and open_series must
+    // reject with InvalidTerms, exactly as it did before this
+    // revision split the staleness constant in two.
+    env.ledger()
+        .set_timestamp((EPOCH_BASE + 4) * EPOCH_SECS + 1);
+    assert!(fx.oracle.is_stale(&asset));
+    let now2 = env.ledger().timestamp();
+    let result = fx.factory.try_open_series(&make_terms(now2));
+    assert_eq!(
+        result,
+        Err(Ok(market_factory::Error::InvalidTerms)),
+        "open_series must still reject at the unchanged is_stale boundary, \
+         not the new, larger score_stale_after_epochs"
+    );
+}

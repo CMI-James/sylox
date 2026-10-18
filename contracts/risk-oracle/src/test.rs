@@ -79,9 +79,16 @@ fn epoch_at_time(timestamp: u64) -> u64 {
 /// The first ledger timestamp at which a score computed from
 /// `last_epoch` reads stale, i.e. the smallest `now` for which
 /// `is_stale_epoch`'s own condition (`now / EPOCH_SECS -
-/// last_epoch > STALE_AFTER_EPOCHS`) first holds.
+/// last_epoch > SCORE_STALE_AFTER_EPOCHS`) first holds. Every real
+/// call site below exercises `check_stale`/`asset_stale`, the
+/// `score()`/`check_stale` family judged against
+/// `SCORE_STALE_AFTER_EPOCHS`, never `is_stale`'s own
+/// `STALE_AFTER_EPOCHS` (see `is_stale_false_right_after_posting_
+/// then_true_after_stale_after_epochs`, which hardcodes its own
+/// timestamps against `STALE_AFTER_EPOCHS` instead, deliberately not
+/// sharing this helper).
 fn first_stale_time(last_epoch: u64) -> u64 {
-    (last_epoch + crate::STALE_AFTER_EPOCHS + 1) * crate::EPOCH_SECS
+    (last_epoch + crate::SCORE_STALE_AFTER_EPOCHS + 1) * crate::EPOCH_SECS
 }
 
 /// The epoch `SIGNAL_DISPUTE_SECS` after `epoch`'s own close, i.e. how
