@@ -75,7 +75,7 @@ const _: () = assert!(
 /// `is_stale(asset)` only (`Series`/`MarketFactory` read this through
 /// `is_stale` to block new cover/series), judged against the newest
 /// *posted* epoch (`storage::get_newest_epoch_pub`). Section 8.6's
-/// depeg coverage guarantee depends on this exact bound staying on
+/// depeg coverage logic depends on this exact bound staying on
 /// the newest posted epoch, not the newest Final one: "the open epoch
 /// plus any keeper backlog, which the staleness rule in Section 5.5
 /// caps below `stale_after_epochs`" is the caveat that keeps a depeg
@@ -129,7 +129,7 @@ const SCORE_STALE_AFTER_EPOCHS: u64 = 5;
 /// clock (see `sylox_types::time`'s own doc comment), not to keep
 /// `SCORE_STALE_AFTER_EPOCHS` correctly tuned at that scale, so this
 /// assertion is scoped to the normal build only rather than claiming
-/// a guarantee demo-time does not actually need or get.
+/// a promise demo-time does not actually need or get.
 #[cfg(not(feature = "demo-time"))]
 const _: () = assert!(SCORE_STALE_AFTER_EPOCHS == 1 + (SIGNAL_DISPUTE_SECS / EPOCH_SECS) + 1 + 1);
 
