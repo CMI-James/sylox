@@ -36,7 +36,33 @@ contract address outright), not as something blocking this plan.
 
 ## Steps, per contract (RiskOracle, EventRegistry, Staking, Treasury)
 
-1. **Build and upload the new WASM.**
+1. **Confirm the build is the real release build, before uploading anything.**
+   For every one of the four contracts: the Wasm must come from
+   `target/wasm32v1-none/release/`, never `target/demo-time/` (the
+   separate `CARGO_TARGET_DIR` `deploy/deploy.sh` testnet-demo builds
+   into, so a demo-time wasm can never collide with the real one on
+   disk).
+
+   For RiskOracle specifically (the one contract with its own
+   `demo_build()` read and release-wasm test today; EventRegistry,
+   Staking and Treasury also build the `demo-time` feature through
+   the shared `sylox_types::time` scaling, but have no equivalent
+   per-wasm check yet), also confirm one of the two:
+   - the `demo-time-not-in-release` CI job passed on the exact commit
+     being uploaded (it builds `risk-oracle` with `stellar contract
+     build --package risk-oracle`, no `--features`, then runs
+     `demo_build_is_false_in_the_real_release_wasm` against that
+     binary with `--ignored`); or
+   - run that same check by hand: `stellar contract build --package
+     risk-oracle` (no `--features`), then `cargo test -p risk-oracle
+     --lib -- --ignored release_wasm`, and confirm it passes against
+     the wasm about to be uploaded.
+
+   If either check fails, or neither has actually been run against
+   this exact commit, STOP. Do not upload. A wasm built with
+   `--features demo-time` must never reach testnet.
+
+2. **Build and upload the new WASM.**
    ```
    stellar contract upload --wasm target/wasm32v1-none/release/<contract>.wasm \
      --source-account sylox-testnet-deployer --network testnet
@@ -46,10 +72,10 @@ contract address outright), not as something blocking this plan.
    `sylox-testnet-deployer` for consistency with the original
    deploy). Prints the new WASM hash. Record it.
 
-2. **Call `upgrade`, authorized by the contract's own governor.**
+3. **Call `upgrade`, authorized by the contract's own governor.**
    ```
    stellar contract invoke --id <contract id> --source-account sylox-testnet-admin \
-     --network testnet -- upgrade --new_wasm_hash <hash from step 1>
+     --network testnet -- upgrade --new_wasm_hash <hash from step 2>
    ```
    Signs with `sylox-testnet-admin` (stands in for `Governor` per
    lead decision D1 in `deploy/deploy.sh`: `Governor` itself is
@@ -67,7 +93,7 @@ contract address outright), not as something blocking this plan.
    PR that shipped this fix actually bumped it, since the shared
    `do_upgrade` has no way to enforce that itself).
 
-3. **Call `migrate`, same signer.**
+4. **Call `migrate`, same signer.**
    ```
    stellar contract invoke --id <contract id> --source-account sylox-testnet-admin \
      --network testnet -- migrate
@@ -90,7 +116,7 @@ contract address outright), not as something blocking this plan.
    version marker actually advanced, not just that the call didn't
    error for some other reason.
 
-4. **Update `deployments/testnet.json`.**
+5. **Update `deployments/testnet.json`.**
    Add the new `wasm_hash` for that contract, keeping the old one in
    a `history` list (the on-chain `Upgraded` event only carries
    `old_version`, a small integer, never a wasm hash: there's no SDK
@@ -118,8 +144,9 @@ stellar contract deploy --wasm target/wasm32v1-none/release/market_factory.wasm 
   --treasury <treasury id> --usdc <usdc contract id> --series_wasm <series wasm hash>
 ```
 Signs with `sylox-testnet-deployer`. `series_wasm` needs `series.wasm`
-uploaded first (`stellar contract upload`, same pattern as step 1
-above) so its hash can be passed to the constructor.
+uploaded first (`stellar contract upload`, same pattern as step 2
+above, including the release-build check in step 1) so its hash can
+be passed to the constructor.
 
 **Check it worked:**
 ```
@@ -142,7 +169,7 @@ the SAME EventRegistry upgrade that wires the real
 was added in the #12/#21 redeploy... landing together with the code
 that actually reads it"). So this step depends on that specific
 EventRegistry code existing, not just any EventRegistry upgrade:
-confirm the WASM being uploaded in step 1 of the EventRegistry
+confirm the WASM being uploaded in step 2 of the EventRegistry
 upgrade above is the one that actually adds `set_factory` and reads
 `config.factory`, not an earlier one.
 
@@ -368,18 +395,18 @@ Copy `deploy/deploy.sh` to a scratch copy (not committed), replace
 every `sylox-testnet-*` identity name with the `sylox-rehearsal-*`
 equivalent above, and give it its own `CONSTRUCTOR_NONCE` (e.g.
 `"sylox-rehearsal-1"`) so its precomputed addresses never collide
-with the real deploy's own. Run it and the rest of the appendix's own
-steps 2-4 (below) against this separate identity set, writing to a
+with the real deploy's own. Run it and the rest of the per-contract
+steps 2-5 above against this separate identity set, writing to a
 SEPARATE `deployments/testnet-rehearsal.json` (never the real
 `deployments/testnet.json`) so nothing in the real deploy record, the
 live poster's baked-in file, or any committed file is touched. This
 gives the rehearsal its own, separate contract addresses to run the
-real upgrade steps (1-4 above, plus MarketFactory/`set_factory`)
+real upgrade steps (1-5 above, plus MarketFactory/`set_factory`)
 against: the whole point of a rehearsal is to exercise `upgrade()`
 somewhere that is not the shared deployment, so it still needs a
 deploy of its own to upgrade.
 
-Run the full upgrade procedure (steps 1-4, plus MarketFactory) above
+Run the full upgrade procedure (steps 1-5, plus MarketFactory) above
 against these rehearsal addresses. Run the snapshot test (requirement
 1, above) against a REAL snapshot of this rehearsal deployment's own
 storage after it's accumulated some real history, proving the
@@ -447,7 +474,7 @@ it.
    is good evidence to link if a "why" is wanted).
 
 3. **Update `deployments/testnet.json`.**
-   Already covered per-contract in step 4 above; restated here as the
+   Already covered per-contract in step 5 above; restated here as the
    explicit "after" checklist item since it's easy to do per-contract
    and forget as a final whole-file commit.
 
