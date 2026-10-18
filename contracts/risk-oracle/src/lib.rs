@@ -71,8 +71,67 @@ const _: () = assert!(
         <= storage::RING_SLOTS as u64 * EPOCH_SECS
 );
 
-/// technical-doc.md Section 23 `stale_after_epochs` default.
+/// technical-doc.md Section 23 `stale_after_epochs` default. Gates
+/// `is_stale(asset)` only (`Series`/`MarketFactory` read this through
+/// `is_stale` to block new cover/series), judged against the newest
+/// *posted* epoch (`storage::get_newest_epoch_pub`). Section 8.6's
+/// depeg coverage guarantee depends on this exact bound staying on
+/// the newest posted epoch, not the newest Final one: "the open epoch
+/// plus any keeper backlog, which the staleness rule in Section 5.5
+/// caps below `stale_after_epochs`" is the caveat that keeps a depeg
+/// window from starting before a purchase, and it is unaffected by
+/// `SCORE_STALE_AFTER_EPOCHS` below, which governs a different signal.
 const STALE_AFTER_EPOCHS: u64 = 3;
+
+/// technical-doc.md Section 23 `score_stale_after_epochs` default.
+/// Gates `score(asset).stale` and `check_stale`/`check_stale_internal`
+/// only, judged against a Final epoch (`newest_final`, or the stored
+/// score's own epoch): the signal Section 5.5 calls "is this asset's
+/// risk data current," not the depeg-coverage bound above. Sized from
+/// the real structural lag a sub-epoch-built hour can carry between
+/// its own close and the next epoch becoming eligible to score from:
+/// one epoch for the hour's own close (an hour isn't even a build
+/// candidate until the epoch after it closes), plus
+/// `SIGNAL_DISPUTE_SECS` (2 epochs at the default) for its last
+/// sub-epoch's own dispute window, plus one epoch for the live
+/// poster's own cron interval (`SUB_EPOCH_GRID_SECS`, 5 minutes,
+/// rounded up to a full epoch) before a build is even attempted, plus
+/// one epoch of slack: 1 + 2 + 1 + 1 = 5. Confirmed against this
+/// revision's own observed testnet builds (deploy/post-demo-signals.sh's
+/// live poster, redeployed with PR #97): every hour that built took
+/// well under 2 hours from first becoming a build candidate to
+/// landing Final, so 5 leaves comfortable margin above the measured
+/// worst case while still being a real, derived bound rather than an
+/// arbitrarily large one. `STALE_AFTER_EPOCHS` above stayed at 3
+/// because a sub-epoch-built hour's own finality lag was never part
+/// of what it was sized for in the first place (it predates v1.5's
+/// sub-epoch posting path entirely) and `is_stale`'s depeg-coverage
+/// role must not loosen.
+const SCORE_STALE_AFTER_EPOCHS: u64 = 5;
+
+/// Build-time check (normal build only): the arithmetic in
+/// `SCORE_STALE_AFTER_EPOCHS`'s own doc comment (1 epoch for the
+/// hour's own close, plus `SIGNAL_DISPUTE_SECS` in epochs for the
+/// last sub-epoch's dispute window, plus 1 epoch for the poster's own
+/// cron interval rounded up, plus 1 epoch of slack) stays true to its
+/// real components if any of them ever changes, rather than silently
+/// drifting out of sync with the numbers it was derived from.
+///
+/// This does NOT prove the poster-margin term is safe; it only checks
+/// the formula's own internal arithmetic. The "+1 epoch" term assumes
+/// the poster's own round trip (about 10 to 12 seconds, measured on
+/// testnet) is a small fraction of `EPOCH_SECS`, which no assertion
+/// here checks. In the real build that is 12 of 3,600 seconds. In
+/// demo-time (`EPOCH_SECS` and `SUB_EPOCH_GRID_SECS` both 60s, so one
+/// sub-epoch per hour) it is about 12 of 60 seconds: a smaller margin,
+/// still positive, but not the same comfortable headroom the real
+/// build has. Demo-time exists only to play the scenario on a fast
+/// clock (see `sylox_types::time`'s own doc comment), not to keep
+/// `SCORE_STALE_AFTER_EPOCHS` correctly tuned at that scale, so this
+/// assertion is scoped to the normal build only rather than claiming
+/// a guarantee demo-time does not actually need or get.
+#[cfg(not(feature = "demo-time"))]
+const _: () = assert!(SCORE_STALE_AFTER_EPOCHS == 1 + (SIGNAL_DISPUTE_SECS / EPOCH_SECS) + 1 + 1);
 
 /// technical-doc.md Section 23 `band_down_epochs` default.
 const BAND_DOWN_EPOCHS: u32 = 3;
@@ -1594,7 +1653,7 @@ impl RiskOracle {
 
         let result = match (stored, newest_final) {
             (Some(current), Some(newest_final)) if current.band != Band::Event => RiskScore {
-                stale: is_stale_epoch(&env, newest_final),
+                stale: is_stale_epoch(&env, newest_final, SCORE_STALE_AFTER_EPOCHS),
                 ..current
             },
             (Some(current), _) => current, // Event band stays as stored regardless of staleness.
@@ -1643,7 +1702,7 @@ impl RiskOracle {
 
     pub fn is_stale(env: Env, asset: Address) -> bool {
         match storage::get_newest_epoch_pub(&env, &asset) {
-            Some(newest) => is_stale_epoch(&env, newest),
+            Some(newest) => is_stale_epoch(&env, newest, STALE_AFTER_EPOCHS),
             None => true,
         }
     }
@@ -1758,14 +1817,19 @@ fn is_stale_timestamp(env: &Env, timestamp: u64) -> bool {
 }
 
 /// technical-doc.md Section 5.5: an asset (or, here, a specific epoch
-/// candidate) is stale if more than `stale_after_epochs` epochs have
-/// passed since it. Shared by `score()` (a pure read) and
-/// `recompute_score` (a write), neither of which is a method so both
-/// can call it without going through `Self`.
-fn is_stale_epoch(env: &Env, epoch: u64) -> bool {
+/// candidate) is stale if more than `threshold` epochs have passed
+/// since it. Shared by every caller that judges staleness from an
+/// epoch (as opposed to `is_stale_timestamp`'s external-adapter
+/// timestamps, a different signal entirely): each passes its own
+/// threshold explicitly rather than reaching for a shared constant,
+/// since `STALE_AFTER_EPOCHS` (the depeg-coverage bound `is_stale`
+/// reads) and `SCORE_STALE_AFTER_EPOCHS` (the score-freshness bound
+/// `score()`/`check_stale` read) are deliberately different numbers
+/// for different questions (see both constants' own doc comments).
+fn is_stale_epoch(env: &Env, epoch: u64, threshold: u64) -> bool {
     let now = env.ledger().timestamp();
     let current_epoch = now / EPOCH_SECS;
-    current_epoch.saturating_sub(epoch) > STALE_AFTER_EPOCHS
+    current_epoch.saturating_sub(epoch) > threshold
 }
 
 /// The shared implementation behind both the
@@ -1780,7 +1844,7 @@ fn is_stale_epoch(env: &Env, epoch: u64) -> bool {
 fn check_stale_internal(env: &Env, asset: &Address) -> Result<bool, Error> {
     let stored = storage::get_score(env, asset);
     let stale = match &stored {
-        Some(current) => is_stale_epoch(env, current.epoch),
+        Some(current) => is_stale_epoch(env, current.epoch, SCORE_STALE_AFTER_EPOCHS),
         None => true,
     };
     let announced = storage::get_stale_announced(env, asset);
@@ -2944,15 +3008,16 @@ fn recompute_score(env: &Env, asset: &Address, newest_final: u64) -> Result<(), 
             return Ok(()); // Sticky; only clear_event_band moves out of it.
         }
     }
-    if is_stale_epoch(env, newest_final) {
+    if is_stale_epoch(env, newest_final, SCORE_STALE_AFTER_EPOCHS) {
         // The epoch that just became final is itself already outside
-        // stale_after_epochs (a very late backfill); recording it would
-        // immediately read back as stale, which score() already reports
-        // correctly from the stored epoch without a write. asset_stale
-        // emission is not this function's job at all; every caller
-        // runs check_stale_internal afterward, which detects exactly
-        // this "stale on arrival" case from the stored score's own
-        // (unchanged) epoch and announces the transition from there.
+        // score_stale_after_epochs (a very late backfill); recording it
+        // would immediately read back as stale, which score() already
+        // reports correctly from the stored epoch without a write. Re-review
+        // item C7: asset_stale emission is no longer this function's
+        // job at all; every caller runs check_stale_internal
+        // afterward, which detects exactly this "stale on arrival"
+        // case from the stored score's own (unchanged) epoch and
+        // announces the transition from there.
         return Ok(());
     }
     // Comparing `newest_final` directly against `AGGREGATE_SLOTS_7D`
