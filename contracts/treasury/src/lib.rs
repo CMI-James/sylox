@@ -63,8 +63,13 @@ struct Config {
 
 const CONFIG_KEY: Symbol = soroban_sdk::symbol_short!("CONFIG");
 
+/// `set_governor`'s own one-time lock, same shape as EventRegistry's
+/// `FACTORY_SET_KEY`: absent until the first successful `set_governor`
+/// call, then permanently present, so a second call always fails.
+const GOVERNOR_SET_KEY: Symbol = soroban_sdk::symbol_short!("GOV_SET");
+
 /// Issue #12. Bump by hand on every `upgrade()` this contract ships.
-const CONTRACT_VERSION: u32 = 1;
+const CONTRACT_VERSION: u32 = 2;
 /// Issue #12. Instance key for `sylox_types::upgrade::do_migrate`'s own
 /// "which version has this contract's storage already been migrated to"
 /// marker.
@@ -133,6 +138,25 @@ impl Treasury {
         ) {
             return Err(Error::AlreadyMigrated);
         }
+        Ok(())
+    }
+
+    /// One-time governor handover, for the Governor deployment cutover:
+    /// callable only by the CURRENT governor, exactly once. Same
+    /// one-time-lock pattern as `EventRegistry::set_factory` (a storage
+    /// flag checked before the write, set after it), so a second call
+    /// always fails rather than letting the governor be reassigned
+    /// again later through this same path.
+    pub fn set_governor(env: Env, new_admin: Address) -> Result<(), Error> {
+        let mut config = Self::require_config(&env)?;
+        config.governor.require_auth();
+        sylox_types::ttl::extend_instance(&env);
+        if env.storage().instance().has(&GOVERNOR_SET_KEY) {
+            return Err(Error::GovernorAlreadySet);
+        }
+        config.governor = new_admin;
+        env.storage().instance().set(&CONFIG_KEY, &config);
+        env.storage().instance().set(&GOVERNOR_SET_KEY, &true);
         Ok(())
     }
 
