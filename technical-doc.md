@@ -1,10 +1,46 @@
+<img width="2000" height="705" alt="sylox-lockup-horizontal-mono-oatmeal" src="https://github.com/user-attachments/assets/f942d26b-1746-4ed5-8658-9e4db0398595" />
+
 # Sylox Protocol: Technical Documentation
 
 Version: v1.5 draft, October 9, 2026 · Author: David Ejere
 
-## Changelog v1.5
+---
 
-Driven by an SCF delegate's observation that hourly epochs mean a user can wait up to an hour to see new data. Spec only in this revision: no contract code changes. The implementation PR follows once `feat/markets` Part A merges.
+## Table of contents
+
+- [Changelog v1.5](#changelog-v15)
+- [Changelog v1.4](#changelog-v14)
+- [Changelog v1.3](#changelog-v13)
+- [Changelog v1.2](#changelog-v12)
+- [Changelog v1.1](#changelog-v11)
+- [1. Overview and conventions](#1-overview-and-conventions)
+- [2. System architecture](#2-system-architecture)
+- [3. Contract inventory and deployment topology](#3-contract-inventory-and-deployment-topology)
+- [4. Core data model](#4-core-data-model)
+- [5. Anchor Risk Oracle](#5-anchor-risk-oracle)
+- [6. Risk score](#6-risk-score)
+- [7. Reporter network and endpoint probing](#7-reporter-network-and-endpoint-probing)
+- [8. Credit Event Registry](#8-credit-event-registry)
+- [9. Protection Markets](#9-protection-markets)
+- [10. Settlement and accounting math](#10-settlement-and-accounting-math)
+- [11. Risk limits and manipulation defences](#11-risk-limits-and-manipulation-defences)
+- [12. Contract API reference](#12-contract-api-reference)
+- [13. Events reference](#13-events-reference)
+- [14. Error codes](#14-error-codes)
+- [15. Storage layout and TTL strategy](#15-storage-layout-and-ttl-strategy)
+- [16. Roles, authorization and access control](#16-roles-authorization-and-access-control)
+- [17. Governance, parameters and upgrades](#17-governance-parameters-and-upgrades)
+- [18. Offchain services](#18-offchain-services)
+- [19. TypeScript SDK reference](#19-typescript-sdk-reference)
+- [20. Integration guides](#20-integration-guides)
+- [21. Security: invariants, threats and testing](#21-security-invariants-threats-and-testing)
+- [22. Deployment, configuration and operations](#22-deployment-configuration-and-operations)
+- [23. Parameter reference](#23-parameter-reference)
+- [24. Glossary and open technical questions](#24-glossary-and-open-technical-questions)
+
+---
+
+## Changelog v1.5
 
 **Footprint-fix revision, within v1.5 (Section 5.9, S3-S5)**
 
