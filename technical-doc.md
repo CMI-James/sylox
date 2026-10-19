@@ -1,10 +1,46 @@
+<img width="2000" height="705" alt="sylox-lockup-horizontal-mono-oatmeal" src="https://github.com/user-attachments/assets/f942d26b-1746-4ed5-8658-9e4db0398595" />
+
 # Sylox Protocol: Technical Documentation
 
 Version: v1.5 draft, October 9, 2026 · Author: David Ejere
 
-## Changelog v1.5
+---
 
-Driven by an SCF delegate's observation that hourly epochs mean a user can wait up to an hour to see new data. Spec only in this revision: no contract code changes. The implementation PR follows once `feat/markets` Part A merges.
+## Table of contents
+
+- [Changelog v1.5](#changelog-v15)
+- [Changelog v1.4](#changelog-v14)
+- [Changelog v1.3](#changelog-v13)
+- [Changelog v1.2](#changelog-v12)
+- [Changelog v1.1](#changelog-v11)
+- [1. Overview and conventions](#1-overview-and-conventions)
+- [2. System architecture](#2-system-architecture)
+- [3. Contract inventory and deployment topology](#3-contract-inventory-and-deployment-topology)
+- [4. Core data model](#4-core-data-model)
+- [5. Anchor Risk Oracle](#5-anchor-risk-oracle)
+- [6. Risk score](#6-risk-score)
+- [7. Reporter network and endpoint probing](#7-reporter-network-and-endpoint-probing)
+- [8. Credit Event Registry](#8-credit-event-registry)
+- [9. Protection Markets](#9-protection-markets)
+- [10. Settlement and accounting math](#10-settlement-and-accounting-math)
+- [11. Risk limits and manipulation defences](#11-risk-limits-and-manipulation-defences)
+- [12. Contract API reference](#12-contract-api-reference)
+- [13. Events reference](#13-events-reference)
+- [14. Error codes](#14-error-codes)
+- [15. Storage layout and TTL strategy](#15-storage-layout-and-ttl-strategy)
+- [16. Roles, authorization and access control](#16-roles-authorization-and-access-control)
+- [17. Governance, parameters and upgrades](#17-governance-parameters-and-upgrades)
+- [18. Offchain services](#18-offchain-services)
+- [19. TypeScript SDK reference](#19-typescript-sdk-reference)
+- [20. Integration guides](#20-integration-guides)
+- [21. Security: invariants, threats and testing](#21-security-invariants-threats-and-testing)
+- [22. Deployment, configuration and operations](#22-deployment-configuration-and-operations)
+- [23. Parameter reference](#23-parameter-reference)
+- [24. Glossary and open technical questions](#24-glossary-and-open-technical-questions)
+
+---
+
+## Changelog v1.5
 
 **Footprint-fix revision, within v1.5 (Section 5.9, S3-S5)**
 
@@ -20,6 +56,12 @@ Found and fixed while implementing the sub-epoch design above. Rule changes only
 - A new shared constant, `MAX_DEPEG_WINDOW_EPOCHS` (`sylox_types::time`), is the one source `register_definition`'s own window check and `MAX_UNBUILT_HOURS_SCANNED_BY_COVER_GATE`'s build-time assertion both read, so the two limits can never silently drift apart. Open sub-epoch disputes keep hours unbuilt, but cannot cause `UnbuiltBacklog`, because the scanned window is bounded by this constant. Sections 5.9, S5; 11.6.
 - `RiskOracle.sub_peg_ratios_in_span_batch` fetches `Sub(asset)`'s own packed ring entry once per call, not once per `(hour, sub)` pair. Section 15.3.
 - `storage::sub_slot_still_belongs_to` also takes `now`: an `Empty` ring position belongs to `sub_start` only while `sub_start`'s own 5 hour span has not yet elapsed, not for any `Empty` position regardless of age. Section 5.9, S2.
+
+**Score staleness split, within v1.5 (Section 5.5)**
+
+Found and fixed while implementing the sub-epoch design above: a sub-epoch-built hour's own finality lag (its own close, the last sub-epoch's dispute window, and the live poster's own cron interval before a build is even attempted) could exceed the single staleness threshold that then existed, before the hour had any realistic chance to build. `score(asset).stale` could read stale while fresh data was actively posting.
+
+- One shared `stale_after_epochs` threshold is split into two: `stale_after_epochs` (unchanged, default 3) still gates `is_stale(asset)` only, judged against the newest posted epoch, for the depeg coverage bound in Section 8.6. A new `score_stale_after_epochs` (default 5) gates `score(asset).stale` and `check_stale(asset)` only, judged against the stored score's own epoch, sized for a sub-epoch-built hour's own finality lag. Section 5.5.
 
 **S1-S2. A governance-set posting interval underneath the hour, not instead of it**
 
@@ -752,8 +794,11 @@ The `RiskOracle` contract stores one `SignalSet` per asset per epoch, posted by 
 
 ### 5.5 Staleness
 
-- An asset is **stale** if the risk score has not been computed from a Final epoch within `stale_after_epochs` (default 3) epochs of the current one. A brand new asset with fewer than 168 posted epochs (the 7 day baseline every score component needs, Section 6.5) also reads as stale, even while actively posting: there is not yet enough history to compute a trustworthy score at all, which is a different condition from "the data has gone old" but uses the same `stale` field, since nothing else in this spec distinguishes them.
-- Two different reads can disagree about whether an asset is stale, by design: `is_stale(asset)` judges against the newest *posted* epoch; `score(asset).stale` and `check_stale(asset)` both judge against the *stored score's own epoch* (ADR-009). An asset whose finality has stalled behind a gap (ADR-008) can keep posting fresh epochs while its score stays frozen on an old one; `is_stale` alone would miss this, `score().stale` and `check_stale` catch it. Prefer `check_stale`/`score().stale` wherever "is this asset's risk data current" is the actual question.
+- Two different parameters govern staleness, read by two different sets of callers, because they answer two different questions:
+  - `stale_after_epochs` (default 3) gates `is_stale(asset)` only, judged against the newest *posted* epoch. `Series` and `MarketFactory` read this (through `is_stale`) to block new cover and new series. Section 8.6's depeg coverage logic depends on this staying a small, fixed bound on the open epoch plus keeper backlog (Section 8.6), so it is not sized around how long a sub-epoch-built hour can take to become Final; it predates sub-epoch posting (Section 5.9) entirely.
+  - `score_stale_after_epochs` (default 5) gates `score(asset).stale` and `check_stale(asset)` only, judged against the *stored score's own epoch* (ADR-009): the signal this section calls "is this asset's risk data current." It is sized from the real structural lag a sub-epoch-built hour can carry between its own close and the next epoch becoming eligible to score from (one epoch for the hour's own close, plus the signal dispute window, plus the live poster's own cron interval rounded up to a full epoch, plus one epoch of slack), so a score built from a sub-epoch-posted hour does not read stale before that hour had any realistic chance to finish building.
+  - An asset whose finality has stalled behind a gap (ADR-008) can keep posting fresh epochs while its score stays frozen on an old one; `is_stale` alone would miss this, `score().stale` and `check_stale` catch it. Prefer `check_stale`/`score().stale` wherever "is this asset's risk data current" is the actual question, and `is_stale` wherever "is new cover or a new series safe to open" is the question (ADR-009).
+- A brand new asset with fewer than 168 posted epochs (the 7 day baseline every score component needs, Section 6.5) also reads as stale, even while actively posting: there is not yet enough history to compute a trustworthy score at all, which is a different condition from "the data has gone old" but uses the same `stale` field, since nothing else in this spec distinguishes them.
 - While stale: `RiskScore.stale = true`; `MarketFactory` blocks new series and `Series` blocks new cover on that asset; existing cover is unaffected.
 - Staleness never triggers a credit event by itself.
 - `asset_stale` is emitted once per transition into stale, not once per epoch spent stale (ADR-009); `check_stale(asset)` is the permissionless call that actually detects and announces the transition, called once per epoch for every asset by the monitor (Section 22.4).
@@ -2702,7 +2747,8 @@ Every tunable value in one place, with its v1 default. All defaults are starting
 | `signal_dispute_secs` | 7,200 (2h) | seconds | Signal dispute window; unchanged, applies identically to a sub-epoch posting since v1.5 (Section 5.9, S2) |
 | `signal_dispute_bond` | 1,000 | USDC | Signal disputes |
 | `signal_dispute_ruling_secs` | 518,400 (6d) | seconds from the dispute | ADR-010: deadline for the committee to rule on a signal dispute before `resolve_signal_dispute_timeout` applies the default outcome. Lowered from 7 days (finding F1): the worst-case dispute timeline must resolve before the ring wraps around, and 7 days no longer fit once measured precisely against `RING_SLOTS * EPOCH_SECS` |
-| `stale_after_epochs` | 3 | epochs | Staleness |
+| `stale_after_epochs` | 3 | epochs | Staleness: gates `is_stale` only (Section 5.5) |
+| `score_stale_after_epochs` (v1.5) | 5 | epochs | Staleness: gates `score().stale`/`check_stale` only, sized for a sub-epoch-built hour's own finality lag (Section 5.5, 5.9) |
 | `amm_tolerance_bps` | 300 | bps | AMM cross check |
 | `keeper_bond` | 5,000 | USDC | Keepers |
 | `keeper_slash` | 1,000 | USDC | Lost disputes |

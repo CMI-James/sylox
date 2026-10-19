@@ -790,6 +790,122 @@ fn build_hour_writes_empty_below_min_sub_coverage_bps() {
     );
 }
 
+/// `SCORE_STALE_AFTER_EPOCHS` (not exported; mirrors this module's own
+/// `SIGNAL_DISPUTE_SECS` comment at the top of the file): an asset
+/// whose newest Final hour was built through the sub-epoch path, not
+/// posted via the hourly fallback, reads fresh at the normal
+/// structural lag that path carries (hour close, then the last
+/// sub-epoch's own dispute window, then the time it takes a build to
+/// land) and stale once that lag exceeds it - the exact gap this
+/// revision's own `SCORE_STALE_AFTER_EPOCHS` was sized to cover.
+/// Builds 168 epochs of real history through the cheap hourly
+/// fallback path, then builds ONE further hour through sub-epochs
+/// (the realistic shape: an asset that historically posted hourly,
+/// like testnet USDC before the live poster's own build_hour fix),
+/// and checks `score().stale` on both sides of the boundary against
+/// that sub-epoch-built hour specifically, not an hourly one.
+#[test]
+fn score_reads_fresh_then_stale_for_a_sub_epoch_built_hour_at_the_score_threshold() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+    let keeper = Address::generate(&env);
+
+    // 168 epochs of ordinary hourly-fallback history, so scoring is
+    // already active by the time the sub-epoch-built hour under test
+    // arrives (same baseline every other test in this suite uses).
+    super::fill_ring_with_constant_signal(
+        &env,
+        &fx.client,
+        &fx.staking,
+        &asset,
+        168,
+        9_900_000,
+        500_000_000_000,
+    );
+
+    let hour = 170u64;
+    let sub_epoch_secs = SUB_EPOCH_SECS_DEFAULT;
+    let per_hour = (EPOCH_SECS / sub_epoch_secs) as u32; // 12
+    for sub in 0..per_hour {
+        post_sub(
+            &env,
+            &fx.client,
+            &keeper,
+            &asset,
+            hour,
+            sub,
+            sub_epoch_secs,
+            9_900_000,
+        );
+    }
+    // The hour's own close, plus the last sub-epoch's dispute window:
+    // exactly the moment build_hour can first succeed.
+    let built_at = sub_start(hour, per_hour - 1, sub_epoch_secs) + sub_epoch_secs + 7_200 + 1;
+    env.ledger().set_timestamp(built_at);
+    fx.client.build_hour(&asset, &hour);
+    assert!(fx.client.is_final(&asset, &hour));
+    assert_eq!(
+        fx.client.score(&asset).epoch,
+        hour,
+        "score must have advanced to this sub-epoch-built hour"
+    );
+    assert!(
+        !fx.client.score(&asset).stale,
+        "fresh immediately after the sub-epoch-built hour lands Final"
+    );
+
+    // SCORE_STALE_AFTER_EPOCHS (5, not exported - see this test's own
+    // doc comment): current_epoch - hour > 5 is the real condition;
+    // one epoch before that boundary must still read fresh.
+    env.ledger().set_timestamp((hour + 5) * EPOCH_SECS);
+    assert!(
+        !fx.client.score(&asset).stale,
+        "must still read fresh exactly at the SCORE_STALE_AFTER_EPOCHS boundary"
+    );
+
+    env.ledger().set_timestamp((hour + 6) * EPOCH_SECS + 1);
+    assert!(
+        fx.client.score(&asset).stale,
+        "must read stale once the gap exceeds SCORE_STALE_AFTER_EPOCHS"
+    );
+}
+
+/// The same boundary as above, but for an hourly-posted asset (no
+/// sub-epochs at all), proving `SCORE_STALE_AFTER_EPOCHS` applies
+/// identically regardless of which posting path produced the newest
+/// Final hour - this revision changes the threshold's VALUE, never
+/// makes it path dependent.
+#[test]
+fn score_reads_fresh_then_stale_for_an_hourly_posted_asset_at_the_score_threshold() {
+    let env = Env::default();
+    let (fx, asset) = setup_with_asset(&env);
+
+    super::fill_ring_with_constant_signal(
+        &env,
+        &fx.client,
+        &fx.staking,
+        &asset,
+        169,
+        9_900_000,
+        500_000_000_000,
+    );
+    let last_epoch = fx.client.score(&asset).epoch;
+    assert!(!fx.client.score(&asset).stale);
+
+    env.ledger().set_timestamp((last_epoch + 5) * EPOCH_SECS);
+    assert!(
+        !fx.client.score(&asset).stale,
+        "must still read fresh exactly at the SCORE_STALE_AFTER_EPOCHS boundary"
+    );
+
+    env.ledger()
+        .set_timestamp((last_epoch + 6) * EPOCH_SECS + 1);
+    assert!(
+        fx.client.score(&asset).stale,
+        "must read stale once the gap exceeds SCORE_STALE_AFTER_EPOCHS"
+    );
+}
+
 /// S4, I23: a sub-epoch resolved Overturned never contributes to the
 /// built hour, and the hour still builds correctly from the remaining
 /// Final sub-epochs.
